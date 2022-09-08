@@ -370,17 +370,21 @@ class MTCNNLandmarker():
         lm = np.stack(lm)
         return lm.round().astype(int)
 
-def _convert_weights_mtcnn_facenet():
-    import os
+# ==================== EXTRA / NOTES ====================
+
+def convert_weights_mtcnn_facenet():
+    '''This is the code that I used to combine 3 .pt weight files from here:
+       https://github.com/timesler/facenet-pytorch/tree/master/data
+       import it from here and call directly if needed
+       it should create the same mtcnn_facenet.pt file that's used above'''
+    import shutil, os
     import os.path as osp
-    home = osp.dirname(osp.realpath(__file__)) if '__file__' in globals() else os.getcwd()
-    dir = osp.join(home, 'weights')
-    os.makedirs(dir, exist_ok=True)
-    os.chdir(dir)
-  
-    url_download('https://raw.githubusercontent.com/timesler/facenet-pytorch/master/data/pnet.pt', 'pnet.pt')
-    url_download('https://raw.githubusercontent.com/timesler/facenet-pytorch/master/data/rnet.pt', 'rnet.pt')
-    url_download('https://raw.githubusercontent.com/timesler/facenet-pytorch/master/data/onet.pt', 'onet.pt')
+    home = os.getcwd()
+    dst = prep_weights_file('https://raw.githubusercontent.com/timesler/facenet-pytorch/master/data/pnet.pt', 'pnet.pt')
+    dst = prep_weights_file('https://raw.githubusercontent.com/timesler/facenet-pytorch/master/data/rnet.pt', 'rnet.pt')
+    dst = prep_weights_file('https://raw.githubusercontent.com/timesler/facenet-pytorch/master/data/onet.pt', 'onet.pt')
+    os.chdir(osp.dirname(dst))
+    print('working at: ' + os.getcwd())
   
     w1 = torch.load('pnet.pt', map_location=torch.device('cpu'))
     w2 = torch.load('rnet.pt', map_location=torch.device('cpu'))
@@ -389,9 +393,12 @@ def _convert_weights_mtcnn_facenet():
     w2 = dict(('rnet.' + k, v) for (k, v) in w2.items())
     w3 = dict(('onet.' + k, v) for (k, v) in w3.items())
     weights = {**w1, **w2, **w3}
+    
     torch.save(weights, 'mtcnn_facenet.pt')
-  
+    print('saved mtcnn_facenet.pt')
     os.remove('pnet.pt')
     os.remove('rnet.pt')
     os.remove('onet.pt')
+    print('removed pnet.pt, rnet.pt, onet.pt')
     os.chdir(home)
+    print('returned to: ' + home)

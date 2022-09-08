@@ -1,8 +1,10 @@
+import cv2
 import torch
 import torch.nn as nn
 
 from models.mobilenet import MobileNetLandmarker
 from models.mtcnn import MTCNNLandmarker
+from utils.align import face_align
 from utils.download import prep_weights_file
 
 # combined from:
@@ -11,9 +13,7 @@ from utils.download import prep_weights_file
 # https://github.com/xuexingyu24/MobileFaceNet_Tutorial_Pytorch/blob/master/face_model.py
 
 # MobileFaceNet paper: https://arxiv.org/ftp/arxiv/papers/1804/1804.07573.pdf
-# MobileNetV2 paper:     https://arxiv.org/pdf/1801.04381.pdf
-
-
+# MobileNetV2 paper:   https://arxiv.org/pdf/1801.04381.pdf
 
 USE_CBIAS = True
 USE_BN = True
@@ -75,15 +75,13 @@ class MobileFaceNet(nn.Module):
             nn.Flatten(),
             nn.Linear(outro_lin, emb_size, bias=lin_bias) if outro_lin else nn.Identity(),
             nn.BatchNorm1d(emb_size) if outro_lin else nn.Identity())
-    def forward(self, x): # [n, 3, 112, 112]
-        x = self.intro(x)     # [n, c[0], 56, 56]
-        x = self.main(x)        # [n, c[2], 7, 7]
-        x = self.outro(x)     # [n, emb_size]
+    def forward(self, x):   # [n, 3, 112, 112]
+        x = self.intro(x)   # [n, c[0], 56, 56]
+        x = self.main(x)    # [n, c[2], 7, 7]
+        x = self.outro(x)   # [n, emb_size]
         return x
-        
-        
-        
-def get_mobilefacenet(device, src='insightface'):
+
+def get_mbf_pretrained(device, src='insightface'):
     print('Initializing MobileFaceNet model for face feature extraction')
     global USE_CBIAS, USE_BN, USE_PRELU
     if src == 'insightface':
@@ -96,19 +94,19 @@ def get_mobilefacenet(device, src='insightface'):
         model = MobileFaceNet(intro_pw=True).to(device)
         wf = prep_weights_file('https://github.com/foamliu/MobileFaceNet/releases/download/v1.0/mobilefacenet.pt', 'mbfnet_ms_celeb_1m_by_foamliu.pt')
         wd = torch.load(wf, map_location=torch.device(device))
-        wd = adjust_weights_names(wd, model, src)
+        wd = _adjust_weights_names(wd, model, src)
     elif src == 'xuexingyu24':
         USE_CBIAS, USE_BN, USE_PRELU = False, True, True
         model = MobileFaceNet(outro_pw=None, outro_lin=512, lin_bias=False, emb_size=512).to(device)
         wf = prep_weights_file('https://raw.githubusercontent.com/xuexingyu24/MobileFaceNet_Tutorial_Pytorch/master/Weights/MobileFace_Net', 'mbfnet_ms_celeb_1m_by_xuexingyu24')
         wd = torch.load(wf, map_location=torch.device(device))
-        wd = adjust_weights_names(wd, model, src)
+        wd = _adjust_weights_names(wd, model, src)
     model.load_state_dict(wd)
     model.eval()
     print()
     return model
 
-def adjust_weights_names(source, model, src):
+def _adjust_weights_names(source, model, src):
     names = list(source)
     if src == 'foamliu':
         names.insert(12, names.pop(7))
@@ -118,13 +116,11 @@ def adjust_weights_names(source, model, src):
         result[w] = source[names[i]]
     return result
     
-    
-    
 class MobileFaceNetEncoder():
     def __init__(self, device, src='insightface', align=True, landmarker='mobilenet'):
         if align:
             self.landmarker = MobileNetLandmarker(device) if landmarker == 'mobilenet' else MTCNNLandmarker(device)
-        self.detector = get_mobilefacenet(device, src)
+        self.detector = get_mbf_pretrained(device, src)
     
     def __call__(self, images, tform='similarity', square=True, lminp=192, minsize1=None, minsize2=None):
         if hasattr(self, 'landmarker'):
@@ -135,25 +131,28 @@ class MobileFaceNetEncoder():
         input = torch.from_numpy(input)
         with torch.no_grad():
             return self.detector(input).cpu().numpy()
-            
-            
 
-def weights_onnx2torch_mbfnet_insightface():
+# ==================== EXTRA / NOTES ====================
+
+def convert_weights_mbfnet_insightface():
+    '''this is the code I used to convert Insightface's ONNX model's weights to pytorch
+       import it from here and call directly if needed
+       it should create the same 'mbfnet_w600k_insightface.pt' file that's used above
+       need "pip install onnx" to work
+       for browsing onnx model, I used https://netron.app mentioned here: https://github.com/onnx/onnx/issues/1425'''
     import shutil, os
     import os.path as osp
-    home = osp.dirname(osp.realpath(__file__)) if '__file__' in globals() else os.getcwd()
-    dir = osp.join(home, 'weights')
-    os.makedirs(dir, exist_ok=True)
-    os.chdir(dir)
-
-    url_download('https://drive.google.com/uc?id=19I-MZdctYKmVf3nu5Da3HS6KH5LBfdzG', 'buffalo_sc.zip', gdrive=True)
+    home = os.getcwd()
+    dst = prep_weights_file('https://drive.google.com/uc?id=19I-MZdctYKmVf3nu5Da3HS6KH5LBfdzG', 'buffalo_sc.zip', gdrive=True)
+    os.chdir(osp.dirname(dst))
+    print('working at: ' + os.getcwd())
     shutil.unpack_archive('buffalo_sc.zip')
     os.rename('buffalo_sc/w600k_mbf.onnx', 'w600k_mbf.onnx')
     os.remove('buffalo_sc/det_500m.onnx')
     os.remove('buffalo_sc.zip')
     os.rmdir('buffalo_sc')
-    
-    # https://netron.app/ | https://github.com/onnx/onnx/issues/1425
+    print('prepared w600k_mbf.onnx')
+        
     import onnx, onnx.numpy_helper
     onnx_model = onnx.load('w600k_mbf.onnx')
     source = dict([(raw.name, onnx.numpy_helper.to_array(raw)) for raw in onnx_model.graph.initializer])
@@ -192,14 +191,13 @@ def weights_onnx2torch_mbfnet_insightface():
         val = source[str(match[i])]
         if dst[s].dim() == 1:
             val = val.squeeze()
-        dst[s] = torch.Tensor(val)
+        dst[s] = torch.Tensor(val.copy())
     dst[nbt_name] = torch.Tensor(nbt)
     model.load_state_dict(dst)
     model.eval()
     torch.save(model.state_dict(), 'mobilefacenet_w600k_insightface.pt')
-    
-    #os.remove('w600k_mbf.onnx')
+    print('saved mobilefacenet_w600k_insightface.pt')
+    os.remove('w600k_mbf.onnx')
+    print('removed w600k_mbf.onnx')
     os.chdir(home)
-    
-#!pip install onnx
-#weights_onnx2torch_mbfnet_insightface()
+    print('returned to: ' + home)

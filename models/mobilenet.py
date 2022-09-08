@@ -1,3 +1,4 @@
+import cv2
 import torch
 import torch.nn as nn
 
@@ -45,8 +46,6 @@ class MobileNet(nn.Module):
         x = self.outro(x)
         return x
         
-
-
 # https://github.com/deepinsight/insightface/tree/master/model_zoo#21-2d-face-alignment
 # https://github.com/nttstar/insightface-resources/blob/master/alignment/images/2d106markup.jpg
 
@@ -68,19 +67,22 @@ class MobileNetLandmarker():
         lm = (lm + 1) * (192 // 2)
         lm = lm.round().astype(int)
         return lm
-        
- 
- 
- # https://netron.app/ | https://github.com/onnx/onnx/issues/1425
-def weights_onnx2torch_2d106det_insightface():
+
+# ==================== EXTRA / NOTES ====================
+
+def convert_weights_2d106det_insightface():
+    '''This is the code I used to convert Insightface's ONNX model's weights to pytorch
+       import it from here and call directly if needed
+       it should create the same 'mbnet_2d106det_insightface.pt' file that's used above
+       need "pip install onnx" to work
+       for browsing onnx model, I used https://netron.app mentioned here: https://github.com/onnx/onnx/issues/1425'''
     import shutil, os
     import os.path as osp
-    home = osp.dirname(osp.realpath(__file__)) if '__file__' in globals() else os.getcwd()
-    dir = osp.join(home, 'weights')
-    os.makedirs(dir, exist_ok=True)
-    os.chdir(dir)
-    
-    #url_download('https://drive.google.com/uc?id=1M5685m-bKnMCt0u2myJoEK5gUY3TDt_1', '2d106det.onnx', gdrive=True)
+    home = os.getcwd()
+    dst = prep_weights_file('https://drive.google.com/uc?id=1M5685m-bKnMCt0u2myJoEK5gUY3TDt_1', '2d106det.onnx', gdrive=True)
+    os.chdir(osp.dirname(dst))
+    print('working at: ' + os.getcwd())
+
     import onnx, onnx.numpy_helper
     onnx_model = onnx.load('2d106det.onnx')
     src = dict([(raw.name, onnx.numpy_helper.to_array(raw)) for raw in onnx_model.graph.initializer])
@@ -113,9 +115,8 @@ def weights_onnx2torch_2d106det_insightface():
     model.load_state_dict(dst)
     model.eval()
     torch.save(model.state_dict(), 'mbnet_2d106det_insightface.pt')
-    
-    #os.remove('2d106det.onnx')
+    print('saved mbnet_2d106det_insightface.pt')
+    os.remove('2d106det.onnx')
+    print('removed 2d106det.onnx')
     os.chdir(home)
-    
-#!pip install onnx
-#weights_onnx2torch_2d106det_insightface()
+    print('returned to: ' + home)
