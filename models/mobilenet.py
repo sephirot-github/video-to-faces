@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from utils.download import prep_weights_file
+
 # https://arxiv.org/abs/1704.04861
 # https://github.com/deepinsight/insightface/tree/master/alignment/coordinate_reg
 

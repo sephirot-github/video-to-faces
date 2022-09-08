@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.ops import batched_nms
 
-from utils import prep_weights_file
+from utils.download import prep_weights_file
 
 # adapted from https://github.com/timesler/facenet-pytorch/blob/master/models/mtcnn.py
 

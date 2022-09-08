@@ -72,7 +72,7 @@ def url_download(url, dst, gdrive=False):
         session.close()
 
 def prep_weights_file(url, fn, gdrive=False):
-    home = osp.dirname(osp.realpath(__file__)) if '__file__' in globals() else os.getcwd()
+    home = osp.dirname(osp.dirname(osp.realpath(__file__))) if '__file__' in globals() else os.getcwd()
     tdir = osp.join(home, 'weights')
     os.makedirs(tdir, exist_ok=True)
     dst = osp.join(tdir, fn)
