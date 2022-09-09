@@ -166,7 +166,7 @@ def vit_irl_encoder(device, isP12S8, classify=False):
     print()
     return model
     
- def vit_anime_encoder(device, isL, classify=False):
+def vit_anime_encoder(device, isL, classify=False):
     num_cls = None if not classify else 3263
     if isL:
         print('Initializing ViT-L/16 model for anime face feature extraction')

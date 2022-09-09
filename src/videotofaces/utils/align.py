@@ -12,9 +12,9 @@ def face_align(images, landmarks, tform_type, square):
     lm_dst *= scale
     
     for k in range(len(images)):
-        if not lm[k].any():
+        if not landmarks[k].any():
             continue
-        src = lm[k].astype(np.float64)
+        src = landmarks[k].astype(np.float64)
         #for p in lm[k]: cv2.circle(im, p, 1, (0, 255, 0), 1, cv2.LINE_AA)
         M = estimate_similarity(src, lm_dst) if tform_type == 'similarity' else estimate_affine(src, lm_dst)
         images[k] = cv2.warpAffine(images[k], M, (images[k].shape[1], images[k].shape[0]))

@@ -41,11 +41,11 @@ class Darknet53(nn.Module):
         L, C = [1, 2, 8, 8, 4], [(32, 64), (64, 128), (128, 256), (256, 512), (512, 1024)]
         self.conv1 = ConvModule(3, 32, k=3, p=1)
         for i in range(len(L)):
-        block = nn.Sequential()
-        block.add_module('conv', ConvModule(C[i][0], C[i][1], k=3, s=2, p=1))
-        for j in range(L[i]):
-            block.add_module(f'res{j}', ResBlock(C[i][1]))
-        self.add_module(f'conv_res_block{i + 1}', block)
+            block = nn.Sequential()
+            block.add_module('conv', ConvModule(C[i][0], C[i][1], k=3, s=2, p=1))
+            for j in range(L[i]):
+                block.add_module(f'res{j}', ResBlock(C[i][1]))
+            self.add_module(f'conv_res_block{i + 1}', block)
   
     def forward(self, x):
         x = self.conv1(x)
