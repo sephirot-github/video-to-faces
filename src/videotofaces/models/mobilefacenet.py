@@ -2,10 +2,10 @@ import cv2
 import torch
 import torch.nn as nn
 
-from models.mobilenet import MobileNetLandmarker
-from models.mtcnn import MTCNNLandmarker
-from utils.align import face_align
-from utils.download import prep_weights_file
+from .mobilenet import MobileNetLandmarker
+from .mtcnn import MTCNNLandmarker
+from ..utils import face_align
+from ..utils import prep_weights_file
 
 # combined from:
 # https://github.com/deepinsight/insightface/blob/master/recognition/arcface_torch/backbones/mobilefacenet.py
@@ -120,17 +120,18 @@ class MobileFaceNetEncoder():
     def __init__(self, device, src='insightface', align=True, landmarker='mobilenet'):
         if align:
             self.landmarker = MobileNetLandmarker(device) if landmarker == 'mobilenet' else MTCNNLandmarker(device)
-        self.detector = get_mbf_pretrained(device, src)
+        self.encoder = get_mbf_pretrained(device, src)
     
-    def __call__(self, images, tform='similarity', square=True, lminp=192, minsize1=None, minsize2=None):
+    def __call__(self, paths, tform='similarity', square=True, lminp=192, minsize1=None, minsize2=None):
+        images = [cv2.imread(p) for p in paths]
         if hasattr(self, 'landmarker'):
             images = [cv2.resize(img, (lminp, lminp)) for img in images]
             lm = self.landmarker(images)
             images = face_align(images, lm, tform, square)
-        input = cv2.dnn.blobFromImages(images, 1 / 127.5, (112, 112), (127.5, 127.5, 127.5), swapRB=True)
-        input = torch.from_numpy(input)
+        inp = cv2.dnn.blobFromImages(images, 1 / 127.5, (112, 112), (127.5, 127.5, 127.5), swapRB=True)
+        inp = torch.from_numpy(inp)
         with torch.no_grad():
-            return self.detector(input).cpu().numpy()
+            return self.encoder(inp).cpu().numpy()
 
 # ==================== EXTRA / NOTES ====================
 

@@ -1,6 +1,9 @@
+import cv2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from ..utils import prep_weights_file
 
 # taken from:  https://github.com/timesler/facenet-pytorch/blob/master/models/inception_resnet_v1.py
 # explanation: https://towardsdatascience.com/a-simple-guide-to-the-versions-of-the-inception-network-7fc52b863202
@@ -157,17 +160,25 @@ class InceptionResnetV1(nn.Module):
         x = F.normalize(x, p=2, dim=1)
         return x
 
-def incepres_irl_encoder(device, dataset='vggface2'):
-    print('Initializing Inception-Resnet V1 model for face feature extraction')
-    if dataset == 'casia-webface':
-        wf = prep_weights_file('https://github.com/timesler/facenet-pytorch/releases/download/v2.2.9/20180408-102900-casia-webface.pt', '20180408-102900-casia-webface.pt')
-    else:
-        wf = prep_weights_file('https://github.com/timesler/facenet-pytorch/releases/download/v2.2.9/20180402-114759-vggface2.pt', '20180402-114759-vggface2.pt')
-    model = InceptionResnetV1()
-    weights = torch.load(wf, map_location=torch.device(device))
-    weights.pop('logits.weight')
-    weights.pop('logits.bias')
-    model.load_state_dict(weights)
-    model.eval()
-    print()
-    return model
+class InceptionResnetV1Encoder():
+    def __init__(self, device, dataset='vggface2'):
+        print('Initializing Inception-Resnet V1 model for face feature extraction')
+        if dataset == 'casia-webface':
+            wf = prep_weights_file('https://github.com/timesler/facenet-pytorch/releases/download/v2.2.9/20180408-102900-casia-webface.pt', '20180408-102900-casia-webface.pt')
+        else:
+            wf = prep_weights_file('https://github.com/timesler/facenet-pytorch/releases/download/v2.2.9/20180402-114759-vggface2.pt', '20180402-114759-vggface2.pt')
+        weights = torch.load(wf, map_location=torch.device(device))
+        weights.pop('logits.weight')
+        weights.pop('logits.bias')
+        self.model = InceptionResnetV1().to(device)
+        self.model.load_state_dict(weights)
+        self.model.eval()
+        print()
+    
+    def __call__(self, paths):
+        ims = [cv2.imread(p) for p in paths]
+        inp = cv2.dnn.blobFromImages(ims, 1 / 128, (160, 160), (127.5, 127.5, 127.5), swapRB=True)
+        inp = torch.from_numpy(inp)
+        with torch.no_grad():
+            out = self.model(inp)
+        return out.cpu().numpy()

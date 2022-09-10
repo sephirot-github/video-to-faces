@@ -1,0 +1,317 @@
+import os
+import os.path as osp
+
+import cv2
+import numpy as np
+from numpy.core.arrayprint import format_float_scientific
+import torch
+
+from .main import remove_dupes_overall
+
+HAS_DECORD = format_float_scientific
+
+def get_video_list(input, ext):
+    # if input is a .txt file, read it and return lines that are valid file paths
+    if osp.isfile(input) and input.lower().endswith('.txt'):
+        with open(input) as f:
+            files = [l.strip() for l in f.read().splitlines() if osp.isfile(l.strip())]
+            if not files:
+                print('ERROR: specified .txt file doesn\'t contain any valid paths. Please provide a file with paths to videos, each on a separate line')
+            return files
+    
+    # if input is any other file, then consider it to be a single video file (no extra check for extensions,
+    # cv2.VideoCapture.isOpened() will tell later if it's not a valid video or have some unknown codec)
+    if osp.isfile(input):
+        return [input]
+    
+    # if input is directory, list all contents non-recursively, sort alphabetically and return only those that are files
+    files = [osp.join(input, p) for p in sorted(os.listdir(input)) if osp.isfile(osp.join(input, p))]
+    if not files:
+        print('ERROR: no files are found in the specified input directory')
+    if ext:
+        print(ext)
+        # filtering by extensions specified inside semicolon-separated string
+        files = [s for s in files if s.lower().split('.')[-1] in ext.split(';')]
+        if not files:
+            print('ERROR: no files with specified extensions (%s) are found in the input directory' % ext)
+    return files
+    
+    
+def get_detector_model(style, det_model, device):
+    a = 11
+    #if style == 'anime':
+    #    return yolo3_anime_detector(device)
+    #elif det_model == 'mtcnn':
+    #    return mtcnn_irl_detector(device)
+    #return yolo3_irl_detector(device)
+    
+    
+def detect_faces(files, model, vid_params, det_params, save_params, hash_thr):
+
+    out_dir, out_prefix, _, save_frames, save_rejects, save_dupes = save_params
+    
+    os.makedirs(osp.join(out_dir, 'faces'), exist_ok=True)
+    if save_frames:
+        os.makedirs(osp.join(out_dir, 'intermediate', 'frames'), exist_ok=True)
+    if save_rejects:
+        os.makedirs(osp.join(out_dir, 'intermediate', 'rejects'), exist_ok=True)
+    if save_dupes:
+        os.makedirs(osp.join(out_dir, 'intermediate', 'dupes1'), exist_ok=True)
+
+    if len(files) > 1:
+        print('File count: ' + str(len(files)))
+
+    hashes = []
+    for k in range(len(files)):
+        print('Processing ' + files[k])
+        out_prefix_file = out_prefix + ('' if len(files) == 1 else '%02d_' % (k + 1))
+        save_params = (out_dir, out_prefix_file, *save_params[2:])
+        hashes_k = process_video(files[k], model, vid_params, det_params, save_params, hash_thr)
+        hashes.extend(hashes_k)
+    
+    fns = []
+    if hash_thr and hashes:
+        hash_array = np.stack([h for (h, _) in hashes])
+        fns = [fn for (_, fn) in hashes]
+        dup_params = ('hash', hash_thr, save_dupes, out_dir)
+        _, fns = remove_dupes_overall(hash_array, fns, dup_params)
+    
+    print()
+    print('Saved a total of %u faces to: %s' % (len(fns), osp.join(out_dir, 'faces')))
+    print()
+    
+    
+def process_video(path, model, vid_params, det_params, save_params, hash_thr):
+    video_step, video_fragment, video_area, video_reader = vid_params
+    bs, _, _, _, _, _ = det_params
+    use_decord = HAS_DECORD and video_reader == 'decord'
+
+    if use_decord:
+        try:
+            vr = decord.VideoReader(path, decord.gpu())
+        except decord.DECORDError:
+            vr = decord.VideoReader(path)
+        lng = len(vr)
+        fps = round(vr.get_avg_fps())
+    else:
+        cap = cv2.VideoCapture(path)
+        lng = round(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = round(cap.get(cv2.CAP_PROP_FPS))
+        c = 0
+    step = round(fps * video_step)
+    bgn = step if not video_fragment or video_fragment[0] < 0 else max(step, 60 * video_fragment[0] * fps)
+    end = lng if not video_fragment or video_fragment[1] < 0 else min(lng, 60 * video_fragment[1] * fps + 1)
+
+    hashes = []
+    fi = list(range(bgn, end, step))
+    pbar = tqdm(total=len(fi))
+    for k in range(-(len(fi) // -bs)): # ceil
+        bi = fi[bs * k : bs * (k + 1)]
+        if use_decord:
+            frames = vr.get_batch(bi).asnumpy()[..., [2, 1, 0]] # to BGR
+            vr.seek(0) # https://github.com/dmlc/decord/issues/208
+        else:
+            frames = []
+            for i in bi:
+                if step > 50:
+                    # step big enough - should be faster to seek
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, i - 1)
+                    _, frame = cap.read()
+                else:
+                    # step small enough - should be faster to step through sequentially
+                    for j in range(c, i + 1):
+                        cap.grab()
+                    c = i + 1
+                    _, frame = cap.retrieve()
+                frames.append(frame)
+            frames = np.stack(frames)
+        if video_area:
+            cx1, cy1, cx2, cy2 = video_area
+            frames = frames[:, cy1: cy2, cx1: cx2, :]
+        hashes = process_frames_batch(frames, bi, hashes, model, det_params, save_params, hash_thr)
+        pbar.update(len(bi))
+    pbar.close()
+    if not use_decord:
+        cap.release()
+    
+    return hashes
+    
+
+def process_frames_batch(frames, indices, hashes, model, det_params, save_params, hash_thr):
+    _, mscore, msize, mborder, scale, square = det_params
+    out_dir, out_prefix, resize_to, _, _, _ = save_params
+    imsize = frames[0].shape[:2]
+
+    # 1. Do a forward pass through detection network for a batch of frames, receive list[np.array(ndet, 5)] (len = batch_size)
+    with torch.no_grad():
+        boxes = model(frames)
+    # 2. Remove boxes that don't satisfy specified basic conditions
+    # Boxes' coordinates are rounded to int, each array becomes a list of tuples
+    boxes = [filter_boxes(b, imsize, mscore, msize, mborder, save_params, f, i) for (b, f, i) in zip(boxes, frames, indices)] # list[list[tuple(int, int, int, int, float)]]
+    # 3. Scale and/or square each box according to settings
+    boxes = [adjust_boxes(b, imsize, scale, square) for b in boxes]                                                 # list[list[tuple(int, int, int, int, float)]]
+    # 4. Get cropped images, and also save frame number corresponding to each
+    faces = [(get_crops(f, b), i) for (f, i, b) in zip(frames, indices, boxes)]                     # list[(list[imgs], frame_index)]
+    # 5. Flatten the list of lists, while also saving the order of faces
+    faces = [(img, i, j) for (imgs, i) in faces for j, img in enumerate(imgs)]                            # list[(img, frame_index, face_index_within_frame)]
+    # 6. Create filenames from indices saved during 2 prev steps
+    faces = [(img, out_prefix + '%06d_%u.jpg' % (i, j)) for (img, i, j) in faces]                     # list[(img, filename)]
+    # 7. Resize all faces if needed
+    if resize_to:
+        faces = [(resize_face(img, resize_to), fn) for (img, fn) in faces]
+    # 8. Remove all faces that are near-identical to one of the N preceeding faces (N = 5)
+    if hash_thr:
+        faces, hashes = remove_dupes_nearest(faces, hashes, hash_thr, save_params)
+    # 9. Save results on disk
+    for (img, fn) in faces:
+        cv2.imwrite(osp.join(out_dir, 'faces', fn), img)
+    return hashes
+    
+    
+def resize_face(img, resize_to):
+    h, w = img.shape[:2]
+    scale = resize_to / max(h, w)
+    if scale < 1: # smaller images stay that way, no upscaling
+        img = cv2.resize(img, (int(w * scale), int(h * scale)))
+    return img
+
+def check_box(box, img_size, mscore, msize, mborder):
+    x1, y1, x2, y2, score = box
+    H, W = img_size
+    c1 = score < mscore
+    c2 = x2 - x1 < msize or y2 - y1 < msize
+    c3 = mborder and (x1 < mborder or y1 < mborder or x2 > W - mborder or y2 > H - mborder)
+    return (c1, c2, c3)
+
+def filter_boxes(boxes, img_size, mscore, msize, mborder, save_params, frame, frame_index):
+    
+    boxes = [(int(np.floor(x1)), int(np.floor(y1)), int(np.ceil(x2)), int(np.ceil(y2)), score) for (x1, y1, x2, y2, score) in boxes]
+    boxes = [(b, check_box(b, img_size, mscore, msize, mborder)) for b in boxes]
+    passed = [b for (b, c) in boxes if not any(c)]
+
+    out_dir, out_prefix, _, save_frames, save_rejects, _ = save_params
+
+    if save_frames:
+        scale = 1024 / max(img_size)
+        fm = cv2.resize(frame, (int(img_size[1] * scale), int(img_size[0] * scale)))
+        for (b, c) in boxes:
+            x1, y1, x2, y2 = (np.array(b[:4]) * scale).astype(int)
+            color = (0, 0, 255) if any(c) else (0, 255, 0)
+            cv2.rectangle(fm, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(fm, str(round(b[4], 2)), (x1, y1 - 2 if y1 > 10 else y2 - 2), 0, 0.6, color, 1, lineType=cv2.LINE_AA)
+        cv2.imwrite(osp.join(out_dir, 'intermediate', 'frames', out_prefix + '%06d.jpg' % frame_index), fm, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+
+    if not save_rejects:
+        return passed
+
+    H, W = img_size
+    i, j, log = 0, 0, []
+    for ((x1, y1, x2, y2, score), (c1, c2, c3)) in boxes:
+        r = c1 or c2 or c3
+        fn = out_prefix + '%06d_' % frame[1] + ('r%u' % j if r else '%u' % i) + '.jpg'
+        data = [fn, '%.2f' % score, x2 - x1, y2 - y1, x1, y1, x2, y2, int(c1), int(c2), int(c3), int(r)]
+        log.append(','.join([str(el) for el in data]))
+        if r:
+            cv2.imwrite(osp.join(out_dir, 'intermediate', 'rejects', fn), frame[0][max(0, y1): min(H, y2), max(0, x1): min(W, x2)])
+            j += 1
+        else:
+            i += 1
+
+    log_fn = osp.join(out_dir, 'intermediate', 'log_rejects.csv')
+    first_time = not osp.exists(log_fn)
+    with open(log_fn, 'a') as f:
+        if first_time:
+            f.write('file_name,score,width,height,x1,y1,x2,y2')
+            f.write(',too_low(mscore=%s),too_small(msize=%u),too_close(mborder=%s),rejected' % (str(mscore), msize, str(mborder)))
+            f.write('\n')
+        for line in log:
+            f.write('%s\n' % line)
+    return passed
+
+def get_crops(img, boxes):
+    return [img[y1: y2, x1: x2] for (x1, y1, x2, y2, _) in boxes]
+    
+def adjust_boxes(boxes, img_size, scale, square):
+    if isinstance(scale, int):
+        scale = (scale, scale, scale, scale)
+    (sx1, sx2, sy1, sy2) = scale
+    H, W = img_size
+    adjusted = []
+    for (x1, y1, x2, y2, score) in boxes:
+        # 1. scale a box (if scale = 1, then it will just round them up to int)
+        w, h = x2 - x1, y2 - y1
+        xc, yc = x1 + w / 2, y1 + h / 2
+        x1 = int(np.floor(max(0, xc - sx1 * w / 2)))
+        x2 = int(np.ceil(min(W, xc + sx2 * w / 2)))
+        y1 = int(np.floor(max(0, yc - sy1 * h / 2)))
+        y2 = int(np.ceil(min(H, yc + sy2 * h / 2)))
+        w, h = x2 - x1, y2 - y1
+        # 2. square a box
+        if square:
+            if h > w:
+                d = h - w
+                x1 -= d // 2
+                x2 += d - d // 2
+                # in case we went out of bounds
+                if x1 < 0: x2 += abs(x1); x1 = 0; x2 = min(W, x2)
+                if x2 > W: x1 -= x2 - W; x2 = W; x1 = max(0, x1)
+            elif w > h:
+                d = w - h
+                y1 -= d // 2
+                y2 += d - d // 2
+                # in case we went out of bounds
+                if y1 < 0: y2 += abs(y1); y1 = 0; y2 = min(H, y2)
+                if y2 > H: y1 -= y2 - H; y2 = H; y1 = max(0, y1)
+            # final shrinking if box's w/h got larger than frame's h/w
+            w, h = x2 - x1, y2 - y1
+            if w > H:
+                d = w - H
+                x1 += d // 2
+                x2 -= d - d // 2
+            elif h > W:
+                d = h - W
+                y1 += d // 2
+                y2 -= d - d // 2
+        adjusted.append((x1, y1, x2, y2, score))
+    return adjusted
+    
+
+def remove_dupes_nearest(faces, hashes, hash_thr, save_params):
+    out_dir, _, resize_to, _, _, save_dupes = save_params
+
+    idx, log = [], []
+    for k in range(len(faces)):
+        img, fn = faces[k]
+        h = ahash(img)
+        if not hashes:
+            hashes.append((h, fn))
+        else:
+            diffs = [(np.count_nonzero(h != p), pfn) for (p, pfn) in hashes[-5:]]
+            md, md_fn = min(diffs, key=lambda a: a[0])
+            log.append(','.join([fn, md_fn, str(md), '1' if md <= hash_thr else '0']))
+            if md <= hash_thr:
+                idx.append(k)
+                if save_dupes:
+                    img = img if not resize_to else resize_face(img, resize_to)
+                    cv2.imwrite(osp.join(out_dir, 'intermediate', 'dupes1', fn), img)
+            else:
+                hashes.append((h, fn))
+
+    if save_dupes:
+        log_fn = osp.join(out_dir, 'intermediate', 'log_dupes1.csv')
+        first_time = not osp.exists(log_fn)
+        with open(log_fn, 'a') as f:
+            if first_time:
+                f.write('file_name,nearest_in_prev_5,hash_diff,marked_as_duplicate\n')
+            for line in log:
+                f.write('%s\n' % line)
+
+    faces = [f for i, f in enumerate(faces) if i not in idx]
+
+    return faces, hashes
+
+def ahash(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    tiny = cv2.resize(gray, (8, 8))
+    diff = tiny > np.mean(tiny)
+    return 1 * diff.flatten()

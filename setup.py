@@ -40,3 +40,11 @@ setup(
         'Topic :: Software Development :: Libraries :: Python Modules',
     ],
 )
+
+# on package_dir with src structure to support editable installs: https://stackoverflow.com/a/19917117
+
+# helpful links on project structure practices:
+# https://github.com/yngvem/python-project-structure
+# https://github.com/pypa/sampleproject
+# https://blog.ionelmc.ro/2014/05/25/python-packaging/
+# https://github.com/ionelmc/python-nameless
