@@ -8,19 +8,23 @@ import torch.nn.functional as F
 # https://github.com/zhongyy/Face-Transformer/tree/main/copy-to-vit_pytorch-path
 # all dropouts are removed since using only for inference
 
+
 def split_last(x, shape):
-        shape = list(shape)
-        assert shape.count(-1) <= 1
-        if -1 in shape:
-            shape[shape.index(-1)] = int(x.size(-1) / -np.prod(shape))
-        return x.view(*x.size()[:-1], *shape)
+    shape = list(shape)
+    assert shape.count(-1) <= 1
+    if -1 in shape:
+        shape[shape.index(-1)] = int(x.size(-1) / -np.prod(shape))
+    return x.view(*x.size()[:-1], *shape)
+
 
 def merge_last(x, n_dims):
-        s = x.size()
-        assert n_dims > 1 and n_dims < len(s)
-        return x.view(*s[:-n_dims], -1)
+    s = x.size()
+    assert n_dims > 1 and n_dims < len(s)
+    return x.view(*s[:-n_dims], -1)
+
 
 class MultiHeadedSelfAttention(nn.Module):
+    
     def __init__(self, dim, num_heads, att_scale):
         super().__init__()
         self.proj_q = nn.Linear(dim, dim)
@@ -28,6 +32,7 @@ class MultiHeadedSelfAttention(nn.Module):
         self.proj_v = nn.Linear(dim, dim)
         self.n_heads = num_heads
         self.scale = dim if att_scale != 'per_head' else dim // num_heads
+    
     def forward(self, x):
         q, k, v = self.proj_q(x), self.proj_k(x), self.proj_v(x)
         q, k, v = (split_last(x, (self.n_heads, -1)).transpose(1, 2) for x in [q, k, v])
@@ -37,15 +42,20 @@ class MultiHeadedSelfAttention(nn.Module):
         h = merge_last(h, 2)
         return h
 
+
 class PositionWiseFeedForward(nn.Module):
+    
     def __init__(self, dim, ff_dim):
         super().__init__()
         self.fc1 = nn.Linear(dim, ff_dim)
         self.fc2 = nn.Linear(ff_dim, dim)
+    
     def forward(self, x):
         return self.fc2(F.gelu(self.fc1(x)))
 
+
 class Block(nn.Module):
+    
     def __init__(self, dim, heads, ff_dim, eps, att_scale):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim, eps=eps)
@@ -53,6 +63,7 @@ class Block(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.norm2 = nn.LayerNorm(dim, eps=eps)
         self.pwff = PositionWiseFeedForward(dim, ff_dim)
+    
     def forward(self, x):
         h = self.attn(self.norm1(x))
         h = self.proj(h)
@@ -61,16 +72,21 @@ class Block(nn.Module):
         x = x + h
         return x
 
+
 class Transformer(nn.Module):
+    
     def __init__(self, dim, depth, heads, ff_dim, eps, att_scale):
         super().__init__()
         self.blocks = nn.ModuleList([Block(dim, heads, ff_dim, eps, att_scale) for _ in range(depth)])
+    
     def forward(self, x):
         for block in self.blocks:
             x = block(x)
         return x
 
+
 class ViT(nn.Module):
+    
     def __init__(self, img_size, patch_size, dim, depth, heads, ff_dim, eps=1e-05, stem='conv', att_scale='total', classes=None, loss=None):
         super().__init__()
         self.patch_size = patch_size
@@ -105,17 +121,17 @@ class ViT(nn.Module):
         return self.fc(x)
 
     def _unfold_input(self, x): # [bs, 3, 112, 112]
-        '''If stem (1st layer) isn't conv but linear, need to unwrap every [3, p, p] patch from input images into a flattened column
-             Pretrained P12S8 corresponds to 12x12 patches with stride 8, i.e. having overlapping ('linr_ov')
-             Pretrained P8S8 is 8x8 patches with stride 8, i.e. the usual division of images into 8x8 regions ('linr')
-             There is also an implementation difference in how the flattened columns assembled: a 3x2x2 patch from RGB image can go like
-             [0 1] [16 17] [32 33] => a) [0 16 32 1 17 33 4 20 36 5 21 37] (1st pixel from all channels, then 2nd pixel from all channels, etc)
-             [4 5] [20 21] [36 37] => b) [0 1 4 5 16 17 20 21 32 33 36 37] (all pixels from R channel, then all pixel from G channel, etc)
-             tensorflow.space_to_depth or einops.rearrange does a), but torch.nn.functional's unfold or pixel_unshuffle does b)
-             I'm doing a) for P8S8 and b) for P12S8, since github.com/zhongyy/Face-Transformer's models were trained like this
-             (though it's probably doesn't matter if you train yourself)
-             a) is from https://stackoverflow.com/a/44359328
-             b) have hardcoded values (there's enough semi-generalized parameters passed around as it is)'''
+        """If stem (1st layer) isn't conv but linear, need to unwrap every [3, p, p] patch from input images into a flattened column
+        Pretrained P12S8 corresponds to 12x12 patches with stride 8, i.e. having overlapping ('linr_ov')
+        Pretrained P8S8 is 8x8 patches with stride 8, i.e. the usual division of images into 8x8 regions ('linr')
+        There is also an implementation difference in how the flattened columns assembled: a 3x2x2 patch from RGB image can go like
+        [0 1] [16 17] [32 33] => a) [0 16 32 1 17 33 4 20 36 5 21 37] (1st pixel from all channels, then 2nd pixel from all channels, etc)
+        [4 5] [20 21] [36 37] => b) [0 1 4 5 16 17 20 21 32 33 36 37] (all pixels from R channel, then all pixel from G channel, etc)
+        tensorflow.space_to_depth or einops.rearrange does a), but torch.nn.functional's unfold or pixel_unshuffle does b)
+        I'm doing a) for P8S8 and b) for P12S8, since github.com/zhongyy/Face-Transformer's models were trained like this
+        (though it's probably doesn't matter if you train yourself)
+        a) is from https://stackoverflow.com/a/44359328
+        b) have hardcoded values (there's enough semi-generalized parameters passed around as it is)"""
         if self.stem == 'linr_ov':
             return F.unfold(x, 12, stride=8, padding=4).transpose(1, 2) # [bs, 196, 432]
         n, c, h, w = x.shape; p = self.patch_size
@@ -123,6 +139,7 @@ class ViT(nn.Module):
         #x = F.pixel_unshuffle(x, p).reshape(n, c * p ** 2, -1).transpose(1, 2)
         #x = F.unfold(x, p, stride=p).transpose(1, 2)
         return x
+
 
 def vit_irl_encoder(device, isP12S8, classify=False):
     num_cls = None if not classify else 93431
@@ -165,6 +182,7 @@ def vit_irl_encoder(device, isP12S8, classify=False):
     model.eval()
     print()
     return model
+    
     
 def vit_anime_encoder(device, isL, classify=False):
     num_cls = None if not classify else 3263

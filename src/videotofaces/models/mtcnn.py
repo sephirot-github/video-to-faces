@@ -6,9 +6,11 @@ from torchvision.ops import batched_nms
 
 from ..utils import prep_weights_file
 
+
 # adapted from https://github.com/timesler/facenet-pytorch/blob/master/models/mtcnn.py
 
 class PNet(nn.Module):
+
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 10, kernel_size=3)
@@ -35,7 +37,9 @@ class PNet(nn.Module):
         b = self.conv4_2(x)
         return b, a[:, 1]
 
+
 class RNet(nn.Module):
+
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 28, kernel_size=3)
@@ -62,14 +66,18 @@ class RNet(nn.Module):
         x = self.conv3(x)
         x = self.prelu3(x)
         x = x.permute(0, 3, 2, 1).contiguous()
-        x = self.dense4(x.view(x.shape[0], -1))
+        # can't do -1 in reshape because it fails for [0, ...]-dim tensors
+        x = x.reshape(x.shape[0], np.prod(x.shape[1:]))
+        x = self.dense4(x)
         x = self.prelu4(x)
         a = self.dense5_1(x)
         a = self.softmax5_1(a)
         b = self.dense5_2(x)
         return b, a[:, 1]
 
+
 class ONet(nn.Module):
+
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 32, kernel_size=3)
@@ -103,7 +111,8 @@ class ONet(nn.Module):
         x = self.conv4(x)
         x = self.prelu4(x)
         x = x.permute(0, 3, 2, 1).contiguous()
-        x = self.dense5(x.view(x.shape[0], -1))
+        x = x.reshape(x.shape[0], np.prod(x.shape[1:]))
+        x = self.dense5(x)
         x = self.prelu5(x)
         a = self.dense6_1(x)
         a = self.softmax6_1(a)
@@ -111,7 +120,9 @@ class ONet(nn.Module):
         c = self.dense6_3(x)
         return b, c, a[:, 1]
 
+
 class MTCNN(nn.Module):
+
     def __init__(self):
         super().__init__()
         self.pnet = PNet()
@@ -119,7 +130,7 @@ class MTCNN(nn.Module):
         self.onet = ONet()
   
     def _preprocess(self, cv2_images, device):
-        '''Turn a list of np.uint8 arrays obtained by cv2.imread into a normalized tensor fit for input into the network'''
+        """Turn a list of np.uint8 arrays obtained by cv2.imread into a normalized tensor fit for input into the network"""
         x = np.stack(cv2_images)                  # [bs, h, w, 3]
         x = x.transpose(0, 3, 1, 2)               # [bs, 3, h, w]
         x = x[:, [2, 1, 0], :, :]                 # BGR -> RGB
@@ -128,16 +139,17 @@ class MTCNN(nn.Module):
         return x
 
     def _scale_pyramid(self, H, W, minsize, factor):
-        '''Proposal network's transformations are equivalent to going over an image with a fixed 12x12 sliding window and a stride of 2 (i.e. detecting 12x12 faces)
-           But if we downscale input images to be twice as small, then we're effectively detecting 24x24 faces (they'll become so when we upscale the coordinates back)
-           Hence we prepare to scale the input in different ways to detect faces of different sizes
-           The 1st scale is selected for detecting [minsize x minsize], which becomes the smallest face the algorithm can detect
-           And the last scale is the smallest possible for 12x12 window, so that almost the entire image can be one face 
+        """Proposal network's transformations are equivalent to going over an image with a fixed 12x12 sliding window and a stride of 2 (i.e. detecting 12x12 faces)
+        But if we downscale input images to be twice as small, then we're effectively detecting 24x24 faces (they'll become so when we upscale the coordinates back)
+        Hence we prepare to scale the input in different ways to detect faces of different sizes
+        The 1st scale is selected for detecting [minsize x minsize], which becomes the smallest face the algorithm can detect
+        And the last scale is the smallest possible for 12x12 window, so that almost the entire image can be one face 
 
-           for 1920x1080 image and minsize = 20 we'll get scales [0.6, 0.425, 0.3016, 0.2138, 0.1516, 0.1075, 0.0762, 0.054, 0.038, 0.027, 0.019, 0.01365]
-           and sizes [(649, 1153), (460, 817), (326, 580), (231, 411), (164, 292), (117, 207), (83, 147), (59, 104), (42, 74), (30, 53), (21, 37), (15, 27)]
+        for 1920x1080 image and minsize = 20 we'll get scales [0.6, 0.425, 0.3016, 0.2138, 0.1516, 0.1075, 0.0762, 0.054, 0.038, 0.027, 0.019, 0.01365]
+        and sizes [(649, 1153), (460, 817), (326, 580), (231, 411), (164, 292), (117, 207), (83, 147), (59, 104), (42, 74), (30, 53), (21, 37), (15, 27)]
        
-           An example of a more detailed explanation: https://towardsdatascience.com/how-does-a-face-detection-program-work-using-neural-networks-17896df8e6ff'''
+        An example of a more detailed explanation: https://towardsdatascience.com/how-does-a-face-detection-program-work-using-neural-networks-17896df8e6ff
+        """
         scales = []
         s = 12.0 / minsize
         while min(H, W) * s >= 12:
@@ -153,21 +165,23 @@ class MTCNN(nn.Module):
 
     def _get_cropped_candidates(self, x, imgidx, boxes, size):
         H, W = x.shape[2:4]
-        l = []
+        l = [torch.zeros([0, x.shape[1], *size])]
         for k in range(boxes.shape[0]):
             x1, y1, x2, y2 = boxes[k]
             x1, y1, x2, y2 = max(1, int(x1)), max(1, int(y1)), min(W, int(x2)), min(H, int(y2))
             if y2 > y1 - 1 and x2 > x1 - 1:
                 crop = x[imgidx[k], :, y1 - 1: y2, x1 - 1: x2]
                 crop = self._resample(crop, size)
-                l.append(crop)
-        return torch.stack(l)  
+                l.append(crop.unsqueeze(0))
+        return torch.cat(l)
+        # could do l=[] above, then l.append(crop); torch.stack(l) here,
+        # but that fails for [0, ...] tensors (when no boxes found)
 
     def forward(self, imgs, minsize=20, return_landmarks=False):
         x = self._preprocess(imgs, next(self.parameters()).device)
         H, W = x.shape[2:4]
         scales, sizes = self._scale_pyramid(H, W, minsize, 0.709)
-    
+
         # Stage 1: run proposal network for input images in every planned scaling
         # start with boxes as respective 12x12 image patches where scores were above threshold
         # do NMS first within scale + image, then within image
@@ -270,30 +284,31 @@ class MTCNN(nn.Module):
         return boxes
 
     def _nms_vectorized(self, boxes, scores, classes, thresh, method, chain_suppression=True):
-        '''A vectorized implementation of batched NMS that can also do intersection over minimum (torchvision.batched_nms can only do over union)
-           First, we sort boxes' indices from hightest score to lowest, then we get all unique pairings within each class (e.g. (0, 1), (0, 2), (1, 2) ...)
-           for a pair of boxes (x1, y1, x2, y2), (x3, y3, x4, y4), their intersection would be (max(x1, x3), max(y1, y3), min(x2, x4), min(y2, y4))
-           if this intersection's width or height is <= 0, that means the boxes don't intersect at all, so we stop considering all those
-           then we calculate IoU or IoM for every remaining pair, leave only ones above threshold, and get the resulting pairs
-           since torch.combinations creates pairs (a, b) from list L so that L.index(a) < L.index(b), and our indices are sorted by descending scores,
-           the left box's score is always higher than the right box's score, so we just need to get all 2nd elements from the resulting pairs,
-           and that will be all of our supressed boxes (and we return the opposite of that, i.e. surviving boxes)
+        """A vectorized implementation of batched NMS that can also do intersection over minimum (torchvision.batched_nms can only do over union)
+        First, we sort boxes' indices from hightest score to lowest, then we get all unique pairings within each class (e.g. (0, 1), (0, 2), (1, 2) ...)
+        for a pair of boxes (x1, y1, x2, y2), (x3, y3, x4, y4), their intersection would be (max(x1, x3), max(y1, y3), min(x2, x4), min(y2, y4))
+        if this intersection's width or height is <= 0, that means the boxes don't intersect at all, so we stop considering all those
+        then we calculate IoU or IoM for every remaining pair, leave only ones above threshold, and get the resulting pairs
+        since torch.combinations creates pairs (a, b) from list L so that L.index(a) < L.index(b), and our indices are sorted by descending scores,
+        the left box's score is always higher than the right box's score, so we just need to get all 2nd elements from the resulting pairs,
+        and that will be all of our supressed boxes (and we return the opposite of that, i.e. surviving boxes)
 
-           A more common implementation can be found, for example, here: https://github.com/rbgirshick/fast-rcnn/blob/master/lib/utils/nms.py
-           It goes in a while loop like this: select a box with the highest score, keep it, get her IoU's with every other box,
-           remove all supressions, repeat until everything is either kept or removed
-           There's also a batch variation of this at https://github.com/timesler/facenet-pytorch/blob/master/models/utils/detect_face.py,
-           but I'm a bit bothered that it leads to O(n^2) for all boxes, while a more typical loop would be O(n^2) only for each class subset of boxes
+        A more common implementation can be found, for example, here: https://github.com/rbgirshick/fast-rcnn/blob/master/lib/utils/nms.py
+        It goes in a while loop like this: select a box with the highest score, keep it, get her IoU's with every other box,
+        remove all supressions, repeat until everything is either kept or removed
+        There's also a batch variation of this at https://github.com/timesler/facenet-pytorch/blob/master/models/utils/detect_face.py,
+        but I'm a bit bothered that it leads to O(n^2) for all boxes, while a more typical loop would be O(n^2) only for each class subset of boxes
 
-           Also, if, for example, B0 suppresses B1, and B1 suppresses B2 (but B0 doesn't suppress B2), and we get [(0, 1), (1, 2)] pairs as per 1st paragraph
-           then supressing all 2nd elements will also remove B2, but the common implementation will keep B2, because there, by the time B1 and B2 compared,
-           B1 was already eliminated by B0. So there's another option at the end here to account for this: instead of always supressing 2nd element in a pair,
-           we supress it only if 1st element is still present (i.e. haven't appeared as 2nd element in any of the rows above)
-           I'm not sure such "extra chain supression" can even appear with actual boxes (it didn't on my limited tests with real images), so maybe it doesn't matter
+        Also, if, for example, B0 suppresses B1, and B1 suppresses B2 (but B0 doesn't suppress B2), and we get [(0, 1), (1, 2)] pairs as per 1st paragraph
+        then supressing all 2nd elements will also remove B2, but the common implementation will keep B2, because there, by the time B1 and B2 compared,
+        B1 was already eliminated by B0. So there's another option at the end here to account for this: instead of always supressing 2nd element in a pair,
+        we supress it only if 1st element is still present (i.e. haven't appeared as 2nd element in any of the rows above)
+        I'm not sure such "extra chain supression" can even appear with actual boxes (it didn't on my limited tests with real images), so maybe it doesn't matter
 
-           Why over minimum instead of union in the first place? I have no idea, but maybe something like this is applicable:
-           https://stackoverflow.com/questions/47759450/intersection-over-union-but-replacing-the-union-with-the-minimum-area-in-matlab
-           Extra reading on some more substantial algorithmical improvements: https://whatdhack.medium.com/reflections-on-non-maximum-suppression-nms-d2fce148ef0a'''
+        Why over minimum instead of union in the first place? I have no idea, but maybe something like this is applicable:
+        https://stackoverflow.com/questions/47759450/intersection-over-union-but-replacing-the-union-with-the-minimum-area-in-matlab
+        Extra reading on some more substantial algorithmical improvements: https://whatdhack.medium.com/reflections-on-non-maximum-suppression-nms-d2fce148ef0a
+        """
         dv = boxes.device
         if boxes.numel() == 0:
             return torch.Tensor([]).to(dv, torch.int64)
@@ -331,31 +346,48 @@ class MTCNN(nn.Module):
                 keep.pop(keep.index(pair[1]))
         return torch.Tensor(keep).to(dv, torch.int64)
 
-def mtcnn_irl_detector(device, min_face_size=20):
-    print('Initializing MTCNN model for live-action face detection')
-    wf = prep_weights_file('https://drive.google.com/uc?id=1qHW1xoTvuqlUBBhPx1ZLpzUXrWHfW1jN', 'mtcnn_facenet.pt', gdrive=True)
-    wd = torch.load(wf, map_location=torch.device(device))
-    model = MTCNN(min_face_size).to(device)
-    model.load_state_dict(wd)
-    model.eval()
-    print()
-    return model
+
+class MTCNNDetector():
+    """TBD"""
+
+    def __init__(self, device, min_face_size=20):
+        """TBD"""
+        print('Initializing MTCNN model for live-action face detection')
+        wf = prep_weights_file('https://drive.google.com/uc?id=1qHW1xoTvuqlUBBhPx1ZLpzUXrWHfW1jN', 'mtcnn_facenet.pt', gdrive=True)
+        wd = torch.load(wf, map_location=torch.device(device))
+        self.model = MTCNN().to(device)
+        self.model.load_state_dict(wd)
+        self.model.eval()
+        self.minsize = min_face_size
+        print()
+        
+    def __call__(self, frames):
+        """TBD"""
+        with torch.no_grad():
+            boxes = self.model(frames, self.minsize)
+        return boxes
+
 
 class MTCNNLandmarker():
-    def __init__(self, device):
+    """TBD"""
+
+    def __init__(self, device, minsize1=None, minsize2=None):
+        """TBD"""
         print('Initializing MTCNN model for landmark detection')
         wf = prep_weights_file('https://drive.google.com/uc?id=1qHW1xoTvuqlUBBhPx1ZLpzUXrWHfW1jN', 'mtcnn_facenet.pt', gdrive=True)
         wd = torch.load(wf, map_location=torch.device(device))
         self.model = MTCNN().to(device)
         self.model.load_state_dict(wd)
         self.model.eval()
+        self.minsize1 = minsize1
+        self.minsize2 = minsize2
     
-    def __call__(self, images, minsize1=None, minsize2=None):
-        '''Input: list[H, W, 3] of raw numpy arrays as obtained by cv2.imread() OR [bs, H, W, 3] array obtained by calling np.stack() on the same list'''
+    def __call__(self, images):
+        """Input: list[H, W, 3] of raw numpy arrays as obtained by cv2.imread() OR [bs, H, W, 3] array obtained by calling np.stack() on the same list"""
         images = np.stack(images)
         size = min(images.shape[1:3])
-        minsize1 = minsize1 if minsize1 else size // 2
-        minsize2 = minsize2 if minsize2 else size // 4
+        minsize1 = self.minsize1 if self.minsize1 else size // 2
+        minsize2 = self.minsize2 if self.minsize2 else size // 4
         with torch.no_grad():
             _, lm = self.model(images, minsize1, return_landmarks=True)
         eidx = [i for i, lmk in enumerate(lm) if lmk.size == 0]

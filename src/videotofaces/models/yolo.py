@@ -5,13 +5,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.ops import batched_nms
 
-from utils import prep_weights_file
+from ..utils import prep_weights_file
 
 # adapted from: https://github.com/open-mmlab/mmdetection
 # https://github.com/open-mmlab/mmdetection/blob/master/mmdet/models/dense_heads/yolo_head.py
 # https://github.com/open-mmlab/mmdetection/blob/master/mmdet/core/post_processing/bbox_nms.py
 
+
 class ConvModule(nn.Module):
+
     def __init__(self, cin, cout, k, s=1, p=0):
         super().__init__()
         self.conv = nn.Conv2d(cin, cout, k, s, p, bias=False)
@@ -24,7 +26,9 @@ class ConvModule(nn.Module):
         x = self.activate(x)
         return x
 
+
 class ResBlock(nn.Module):
+
     def __init__(self, c):
         super().__init__()
         self.conv1 = ConvModule(c, c // 2, k=1)
@@ -35,7 +39,9 @@ class ResBlock(nn.Module):
         y = self.conv2(y)
         return y + x
 
+
 class Darknet53(nn.Module):
+
     def __init__(self, ):
         super().__init__()
         L, C = [1, 2, 8, 8, 4], [(32, 64), (64, 128), (128, 256), (256, 512), (512, 1024)]
@@ -55,8 +61,10 @@ class Darknet53(nn.Module):
         x4 = self.conv_res_block4(x3)
         x5 = self.conv_res_block5(x4)
         return (x3, x4, x5)
+        
 
 class DetectionBlock(nn.Module):
+
     def __init__(self, cin, cout):
         super().__init__()
         self.conv1 = ConvModule(cin, cout, 1)
@@ -72,8 +80,10 @@ class DetectionBlock(nn.Module):
         x = self.conv4(x)
         x = self.conv5(x)
         return x
+        
 
 class YOLOv3Neck(nn.Module):
+
     def __init__(self):
         super().__init__()
         self.detect1 = DetectionBlock(1024, 512)
@@ -94,8 +104,10 @@ class YOLOv3Neck(nn.Module):
         t = torch.cat((t, x1), 1)
         y1 = self.detect3(t)
         return (y3, y2, y1)
+        
 
 class YOLOv3Head(nn.Module):
+
     def __init__(self, num_classes):
         super().__init__()
         self.convs_bridge = nn.ModuleList([
@@ -119,7 +131,9 @@ class YOLOv3Head(nn.Module):
             maps.append(y)
         return tuple(maps)
 
+
 class YOLOv3(nn.Module):
+
     def __init__(self, img_size=608, num_classes=1, extra_thr=None):
         super().__init__()
         self.img_size = img_size
@@ -237,43 +251,62 @@ class YOLOv3(nn.Module):
             l.append(results[mask].cpu().numpy())
             c.append(classes[mask].cpu().numpy())
         return l, c
+        
 
-def yolo3_anime_detector(device, input_size=608):
-    '''Returns YOLOv3 net with pre-trained weights, ready to detect faces. Weights by: https://github.com/hysts/anime-face-detector
-       Size can be lowered to 416 or 320 (two other common yolo sizes) for a significant speed-up with potentially not that much loss of accuracy'''
+class YOLOv3DetectorAnime():
+    """Returns YOLOv3 net with pre-trained weights, ready to detect faces. Weights by: https://github.com/hysts/anime-face-detector
+    Size can be lowered to 416 or 320 (two other common yolo sizes) for a significant speed-up with potentially not that much loss of accuracy
+    """
+    
+    def __init__(self, device, input_size=608):
+        """TBD"""
+        print('Initializing YOLO v3 model for anime face detection')
+        wf = prep_weights_file('https://github.com/hysts/anime-face-detector/releases/download/v0.0.1/mmdet_anime-face_yolov3.pth', 'mmdet_anime-face_yolov3.pth')
+        wd = torch.load(wf, map_location=torch.device(device))['state_dict']
+        self.model = YOLOv3(img_size=input_size).to(device)
+        self.model.load_state_dict(wd)
+        self.model.eval()
+        print()
+    
+    def __call__(self, frames):
+        """TBD"""
+        with torch.no_grad():
+            boxes = self.model(frames)
+        return boxes
 
-    print('Initializing YOLO v3 model for anime face detection')
-    wf = prep_weights_file('https://github.com/hysts/anime-face-detector/releases/download/v0.0.1/mmdet_anime-face_yolov3.pth', 'mmdet_anime-face_yolov3.pth')
-    model = YOLOv3(img_size=input_size).to(device)
-    weights = torch.load(wf, map_location=torch.device(device))['state_dict']
-    model.load_state_dict(weights)
-    model.eval()
-    print()
-    return model
 
-def yolo3_irl_detector(device, input_size=608):
-    '''Returns YOLOv3 net with pre-trained weights, ready to detect faces
-       Weights are converted from darknet file linked here: https://github.com/juliansprt/OpenCvSharpDNN
-       to keras using a technique described here: https://github.com/chinmaykumar06/face-detection-yolov3-keras
-       then to pytorch by looping over keras_model.get_weights() and doing torch.from_numpy(np.transpose(w[i], (3, 2, 0, 1)))'''
+def YOLOv3DetectorIRL():
+    """Returns YOLOv3 net with pre-trained weights, ready to detect faces
+    Weights are converted from darknet file linked here: https://github.com/juliansprt/OpenCvSharpDNN
+    to keras using a technique described here: https://github.com/chinmaykumar06/face-detection-yolov3-keras
+    then to pytorch by looping over keras_model.get_weights() and doing torch.from_numpy(np.transpose(w[i], (3, 2, 0, 1)))
+    """
+    
+    def __init__(self, device, input_size=608):
+        """TBD"""
+        print('Initializing YOLO v3 model for live-action face detection')
+        wf = prep_weights_file('https://drive.google.com/uc?id=1pjg1_IeAuzgRzZiY92r71uzd_amfcegu', 'yolov3-wider_16000.pt', gdrive=True)
+        wd = torch.load(wf, map_location=torch.device(device))
+        self.model = YOLOv3(img_size=input_size, extra_thr=0.1).to(device)
+        self.model.load_state_dict(wd)
+        self.model.eval()
+        print()
+        
+    def __call__(self, frames):
+        """TBD"""
+        with torch.no_grad():
+            boxes = self.model(frames)
+        return boxes
 
-    print('Initializing YOLO v3 model for live-action face detection')
-    wf = prep_weights_file('https://drive.google.com/uc?id=1pjg1_IeAuzgRzZiY92r71uzd_amfcegu', 'yolov3-wider_16000.pt', gdrive=True)
-    model = YOLOv3(img_size=input_size, extra_thr=0.1).to(device)
-    weights = torch.load(wf, map_location=torch.device(device))
-    model.load_state_dict(weights)
-    model.eval()
-    print()
-    return model
 
 def yolo3_coco_detector(device):
-    '''Returns YOLOv3 net with pre-trained weights, ready to detect objects
-       Weights by: https://github.com/open-mmlab/mmdetection/tree/master/configs/yolo
-       This isn't used anywhere around here, since it's not applicable to face detection
-       (the "person" class will have boxes around whole humans, not just faces/heads),
-       but it's the standard option, so I decided to keep it for possible experiments,
-       and as an example of multi-class implementation'''
-
+    """Returns YOLOv3 net with pre-trained weights, ready to detect objects
+    Weights by: https://github.com/open-mmlab/mmdetection/tree/master/configs/yolo
+    This isn't used anywhere around here, since it's not applicable to face detection
+    (the "person" class will have boxes around whole humans, not just faces/heads),
+    but it's the standard option, so I decided to keep it for possible experiments,
+    and as an example of multi-class implementation
+    """
     print('Initializing YOLO v3 model for object detection (80 classes from COCO dataset)')
     wf = prep_weights_file(
         'https://download.openmmlab.com/mmdetection/v2.0/yolo/yolov3_d53_mstrain-608_273e_coco/yolov3_d53_mstrain-608_273e_coco_20210518_115020-a2c3acb8.pth',

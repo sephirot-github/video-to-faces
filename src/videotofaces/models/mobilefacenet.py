@@ -1,6 +1,7 @@
 import cv2
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .mobilenet import MobileNetLandmarker
 from .mtcnn import MTCNNLandmarker
@@ -79,6 +80,7 @@ class MobileFaceNet(nn.Module):
         x = self.intro(x)   # [n, c[0], 56, 56]
         x = self.main(x)    # [n, c[2], 7, 7]
         x = self.outro(x)   # [n, emb_size]
+        x = F.normalize(x, p=2, dim=1) #equivalent in numpy: x = x / np.linalg.norm(X, axis=1).reshape(-1, 1)
         return x
 
 def get_mbf_pretrained(device, src='insightface'):
@@ -116,18 +118,22 @@ def _adjust_weights_names(source, model, src):
         result[w] = source[names[i]]
     return result
     
-class MobileFaceNetEncoder():
-    def __init__(self, device, src='insightface', align=True, landmarker='mobilenet'):
+class MobileFaceNetEncoderIRL():
+    def __init__(self, device, src='insightface', align=True, landmarker='mobilenet',
+                 tform='similarity', square=True, lminp=192, minsize1=None, minsize2=None):
         if align:
-            self.landmarker = MobileNetLandmarker(device) if landmarker == 'mobilenet' else MTCNNLandmarker(device)
+            self.landmarker = MobileNetLandmarker(device) if landmarker == 'mobilenet' else MTCNNLandmarker(device, minsize1, minsize2)
         self.encoder = get_mbf_pretrained(device, src)
+        self.tform = tform
+        self.square = square
+        self.lminp = lminp
     
-    def __call__(self, paths, tform='similarity', square=True, lminp=192, minsize1=None, minsize2=None):
+    def __call__(self, paths,):
         images = [cv2.imread(p) for p in paths]
         if hasattr(self, 'landmarker'):
-            images = [cv2.resize(img, (lminp, lminp)) for img in images]
+            images = [cv2.resize(img, (self.lminp, self.lminp)) for img in images]
             lm = self.landmarker(images)
-            images = face_align(images, lm, tform, square)
+            images = face_align(images, lm, self.tform, self.square)
         inp = cv2.dnn.blobFromImages(images, 1 / 127.5, (112, 112), (127.5, 127.5, 127.5), swapRB=True)
         inp = torch.from_numpy(inp)
         with torch.no_grad():
