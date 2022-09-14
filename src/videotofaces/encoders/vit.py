@@ -1,7 +1,10 @@
+import cv2
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from ..utils import prep_weights_file
 
 # adapted from
 # https://github.com/arkel23/animesion/tree/main/classification_tagging/models/vit_animesion
@@ -141,68 +144,81 @@ class ViT(nn.Module):
         return x
 
 
-def vit_irl_encoder(device, isP12S8, classify=False):
-    num_cls = None if not classify else 93431
-    if isP12S8:
-        print('Initializing ViT-P12S8 model for face feature extraction')
-        wf = prep_weights_file('https://drive.google.com/uc?id=1U7c_ojiuRPBfolvziB_VthksABHaFKud', 'Backbone_VITs_Epoch_2_Batch_12000_Time_2021-03-17-04-05_checkpoint.pth', gdrive=True)
-    else:
-        print('Initializing ViT-P8S8 model for face feature extraction')
-        wf = prep_weights_file('https://drive.google.com/uc?id=1OZRU430CjABSJtXU0oHZHlxgzXn6Gaqu', 'Backbone_VIT_Epoch_2_Batch_20000_Time_2021-01-12-16-48_checkpoint.pth', gdrive=True)
+class VitEncoder():
+    def __init__(self, device, isP12S8, classify=False):
+        num_cls = None if not classify else 93431
+        if isP12S8:
+            print('Initializing ViT-P12S8 model for face feature extraction')
+            wf = prep_weights_file('https://drive.google.com/uc?id=1U7c_ojiuRPBfolvziB_VthksABHaFKud', 'Backbone_VITs_Epoch_2_Batch_12000_Time_2021-03-17-04-05_checkpoint.pth', gdrive=True)
+        else:
+            print('Initializing ViT-P8S8 model for face feature extraction')
+            wf = prep_weights_file('https://drive.google.com/uc?id=1OZRU430CjABSJtXU0oHZHlxgzXn6Gaqu', 'Backbone_VIT_Epoch_2_Batch_20000_Time_2021-01-12-16-48_checkpoint.pth', gdrive=True)
     
-    model = ViT(img_size=112, patch_size=8, dim=512, depth=20, heads=8, ff_dim=2048, stem='linr_ov' if isP12S8 else 'linr', classes=num_cls).to(device)
-    weights = torch.load(wf, map_location=torch.device(device))
+        self.model = ViT(img_size=112, patch_size=8, dim=512, depth=20, heads=8, ff_dim=2048, stem='linr_ov' if isP12S8 else 'linr', classes=num_cls).to(device)
+        weights = torch.load(wf, map_location=torch.device(device))
 
-    weights['class_token'] = weights.pop('cls_token')
-    weights['norm.weight'] = weights.pop('mlp_head.0.weight')
-    weights['norm.bias'] = weights.pop('mlp_head.0.bias')
-    weights['patch_embedding.weight'] = weights.pop('patch_to_embedding.weight')
-    weights['patch_embedding.bias'] = weights.pop('patch_to_embedding.bias')
-    for i in range(20):
-        weights['transformer.blocks.%u.norm1.weight' % i] = weights.pop('transformer.layers.%u.0.fn.norm.weight' % i)
-        weights['transformer.blocks.%u.norm1.bias' % i] = weights.pop('transformer.layers.%u.0.fn.norm.bias' % i)
-        weights['transformer.blocks.%u.norm2.weight' % i] = weights.pop('transformer.layers.%u.1.fn.norm.weight' % i)
-        weights['transformer.blocks.%u.norm2.bias' % i] = weights.pop('transformer.layers.%u.1.fn.norm.bias' % i)
-        weights['transformer.blocks.%u.proj.weight' % i] = weights.pop('transformer.layers.%u.0.fn.fn.to_out.0.weight' % i)
-        weights['transformer.blocks.%u.proj.bias' % i] = weights.pop('transformer.layers.%u.0.fn.fn.to_out.0.bias' % i)
-        weights['transformer.blocks.%u.pwff.fc1.weight' % i] = weights.pop('transformer.layers.%u.1.fn.fn.net.0.weight' % i)
-        weights['transformer.blocks.%u.pwff.fc1.bias' % i] = weights.pop('transformer.layers.%u.1.fn.fn.net.0.bias' % i)
-        weights['transformer.blocks.%u.pwff.fc2.weight' % i] = weights.pop('transformer.layers.%u.1.fn.fn.net.3.weight' % i)
-        weights['transformer.blocks.%u.pwff.fc2.bias' % i] = weights.pop('transformer.layers.%u.1.fn.fn.net.3.bias' % i)
-        qkv = weights.pop('transformer.layers.%u.0.fn.fn.to_qkv.weight' % i).chunk(3)
-        weights['transformer.blocks.%u.attn.proj_q.weight' % i] = qkv[0]
-        weights['transformer.blocks.%u.attn.proj_k.weight' % i] = qkv[1]
-        weights['transformer.blocks.%u.attn.proj_v.weight' % i] = qkv[2]
-        weights['transformer.blocks.%u.attn.proj_q.bias' % i] = torch.zeros(512)
-        weights['transformer.blocks.%u.attn.proj_k.bias' % i] = torch.zeros(512)
-        weights['transformer.blocks.%u.attn.proj_v.bias' % i] = torch.zeros(512)
-    if not classify:
-        weights.pop('loss.weight')
-    model.load_state_dict(weights)
-    model.eval()
-    print()
-    return model
+        weights['class_token'] = weights.pop('cls_token')
+        weights['norm.weight'] = weights.pop('mlp_head.0.weight')
+        weights['norm.bias'] = weights.pop('mlp_head.0.bias')
+        weights['patch_embedding.weight'] = weights.pop('patch_to_embedding.weight')
+        weights['patch_embedding.bias'] = weights.pop('patch_to_embedding.bias')
+        for i in range(20):
+            weights['transformer.blocks.%u.norm1.weight' % i] = weights.pop('transformer.layers.%u.0.fn.norm.weight' % i)
+            weights['transformer.blocks.%u.norm1.bias' % i] = weights.pop('transformer.layers.%u.0.fn.norm.bias' % i)
+            weights['transformer.blocks.%u.norm2.weight' % i] = weights.pop('transformer.layers.%u.1.fn.norm.weight' % i)
+            weights['transformer.blocks.%u.norm2.bias' % i] = weights.pop('transformer.layers.%u.1.fn.norm.bias' % i)
+            weights['transformer.blocks.%u.proj.weight' % i] = weights.pop('transformer.layers.%u.0.fn.fn.to_out.0.weight' % i)
+            weights['transformer.blocks.%u.proj.bias' % i] = weights.pop('transformer.layers.%u.0.fn.fn.to_out.0.bias' % i)
+            weights['transformer.blocks.%u.pwff.fc1.weight' % i] = weights.pop('transformer.layers.%u.1.fn.fn.net.0.weight' % i)
+            weights['transformer.blocks.%u.pwff.fc1.bias' % i] = weights.pop('transformer.layers.%u.1.fn.fn.net.0.bias' % i)
+            weights['transformer.blocks.%u.pwff.fc2.weight' % i] = weights.pop('transformer.layers.%u.1.fn.fn.net.3.weight' % i)
+            weights['transformer.blocks.%u.pwff.fc2.bias' % i] = weights.pop('transformer.layers.%u.1.fn.fn.net.3.bias' % i)
+            qkv = weights.pop('transformer.layers.%u.0.fn.fn.to_qkv.weight' % i).chunk(3)
+            weights['transformer.blocks.%u.attn.proj_q.weight' % i] = qkv[0]
+            weights['transformer.blocks.%u.attn.proj_k.weight' % i] = qkv[1]
+            weights['transformer.blocks.%u.attn.proj_v.weight' % i] = qkv[2]
+            weights['transformer.blocks.%u.attn.proj_q.bias' % i] = torch.zeros(512)
+            weights['transformer.blocks.%u.attn.proj_k.bias' % i] = torch.zeros(512)
+            weights['transformer.blocks.%u.attn.proj_v.bias' % i] = torch.zeros(512)
+        if not classify:
+            weights.pop('loss.weight')
+        self.model.load_state_dict(weights)
+        self.model.eval()
+        print()
     
+    def __call__(self, paths):
+        # TBD
+        return None
+        
     
-def vit_anime_encoder(device, isL, classify=False):
-    num_cls = None if not classify else 3263
-    if isL:
-        print('Initializing ViT-L/16 model for anime face feature extraction')
-        wf = prep_weights_file('https://drive.google.com/uc?id=1eZai1_gjos6TNeQZg6IY-cIWxtg0Pxah',
-                                                     'verify_danbooruFaces_l16_ptTrue_batch16_imageSize128_50epochs_epochDecay20.ckpt', gdrive=True)
-        model = ViT(img_size=128, patch_size=16, dim=1024, depth=24, heads=16, ff_dim=4096, eps=1e-12, att_scale='per_head', classes=num_cls, loss='CE').to(device)
-    else:
-        print('Initializing ViT-B/16 model for anime face feature extraction')
-        wf = prep_weights_file('https://drive.google.com/uc?id=1hEtmrzlh7RrXuUoxi5eqMQd5yIirQ-XC',
-                                                     'verify_danbooruFaces_b16_ptTrue_batch16_imageSize128_50epochs_epochDecay20.ckpt', gdrive=True)
-        model = ViT(img_size=128, patch_size=16, dim=768, depth=12, heads=12, ff_dim=3072, eps=1e-12, att_scale='per_head', classes=num_cls, loss='CE').to(device)
-    weights = torch.load(wf, map_location=torch.device(device))
-    weights = dict((key.replace('model.', ''), value) for (key, value) in weights.items())
-    weights['pos_embedding'] = weights.pop('positional_embedding.pos_embedding')
-    if not classify:
-        weights.pop('fc.weight')
-        weights.pop('fc.bias')
-    model.load_state_dict(weights)
-    model.eval()
-    print()
-    return model
+class VitEncoderAnime():
+
+    def __init__(self, device, isL, classify=False):
+        num_cls = None if not classify else 3263
+        if isL:
+            print('Initializing ViT-L/16 model for anime face feature extraction')
+            wf = prep_weights_file('https://drive.google.com/uc?id=1eZai1_gjos6TNeQZg6IY-cIWxtg0Pxah',
+                                   'verify_danbooruFaces_l16_ptTrue_batch16_imageSize128_50epochs_epochDecay20.ckpt', gdrive=True)
+            self.model = ViT(img_size=128, patch_size=16, dim=1024, depth=24, heads=16, ff_dim=4096, eps=1e-12, att_scale='per_head', classes=num_cls, loss='CE').to(device)
+        else:
+            print('Initializing ViT-B/16 model for anime face feature extraction')
+            wf = prep_weights_file('https://drive.google.com/uc?id=1hEtmrzlh7RrXuUoxi5eqMQd5yIirQ-XC',
+                                   'verify_danbooruFaces_b16_ptTrue_batch16_imageSize128_50epochs_epochDecay20.ckpt', gdrive=True)
+            self.model = ViT(img_size=128, patch_size=16, dim=768, depth=12, heads=12, ff_dim=3072, eps=1e-12, att_scale='per_head', classes=num_cls, loss='CE').to(device)
+        weights = torch.load(wf, map_location=torch.device(device))
+        weights = dict((key.replace('model.', ''), value) for (key, value) in weights.items())
+        weights['pos_embedding'] = weights.pop('positional_embedding.pos_embedding')
+        if not classify:
+            weights.pop('fc.weight')
+            weights.pop('fc.bias')
+        self.model.load_state_dict(weights)
+        self.model.eval()
+        print()
+        
+    def __call__(self, paths):
+        ims = [cv2.imread(p) for p in paths]
+        inp = cv2.dnn.blobFromImages(ims, 1 / 127.5, (128, 128), (127.5, 127.5, 127.5), swapRB=True)
+        inp = torch.from_numpy(inp)
+        with torch.no_grad():
+            out = self.model(inp)
+        return out.cpu().numpy()

@@ -10,18 +10,18 @@ import sklearn.cluster
 from .utils import tqdm
 from .dupes import remove_dupes_overall
 from .encoders import MobileFaceNetEncoder, IncepResEncoder
-
+from .encoders import VitEncoderAnime
 
 def get_encoder_model(style, enc_model, device):
     """TBD"""
-    if enc_model == 'mbf':
+    if style == 'anime':
+        return VitEncoderAnime(device, enc_model == 'vit_l')
+    elif enc_model == 'mbf':
         return MobileFaceNetEncoder(device)
     elif enc_model == 'facenet':
-        return IncepResEncoder(device)
-    #if style == 'anime':
-    #    return vit_anime_encoder(device, enc_model == 'vit_l'), 128        
+        return IncepResEncoder(device)  
 
-       
+
 def encode_faces(paths, model, bs):
     """TBD"""
     print('Extracting features from images for grouping')

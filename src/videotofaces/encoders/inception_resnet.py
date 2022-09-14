@@ -9,7 +9,9 @@ from ..utils import prep_weights_file
 # explanation: https://towardsdatascience.com/a-simple-guide-to-the-versions-of-the-inception-network-7fc52b863202
 # paper:       https://arxiv.org/pdf/1602.07261.pdf
 
+
 class ConvPlus(nn.Module):
+
     def __init__(self, cin, cout, k, s=1, p=0):
         super().__init__()
         self.conv = nn.Conv2d(cin, cout, k, s, p, bias=False)
@@ -21,7 +23,9 @@ class ConvPlus(nn.Module):
         x = F.relu(x)
         return x
 
+
 class Block35(nn.Module):
+
     def __init__(self, scale=1.0):
         super().__init__()
         self.scale = scale
@@ -40,7 +44,9 @@ class Block35(nn.Module):
         out = F.relu(out)
         return out
     
+
 class Block17(nn.Module):
+
     def __init__(self, scale=1.0):
         super().__init__()
         self.scale = scale
@@ -61,7 +67,9 @@ class Block17(nn.Module):
         out = F.relu(out)
         return out
 
+
 class Block8(nn.Module):
+
     def __init__(self, scale=1.0, relu=True):
         super().__init__()
         self.scale = scale
@@ -84,7 +92,9 @@ class Block8(nn.Module):
             out = F.relu(out)
         return out
 
+
 class Mixed_6a(nn.Module):
+
     def __init__(self):
         super().__init__()
         self.branch0 = ConvPlus(256, 384, 3, s=2)
@@ -98,7 +108,9 @@ class Mixed_6a(nn.Module):
         out = torch.cat((x0, x1, x2), 1)
         return out
 
+
 class Mixed_7a(nn.Module):
+
     def __init__(self):
         super().__init__()
         self.branch0 = nn.Sequential(ConvPlus(896, 256, 1), ConvPlus(256, 384, 3, s=2))
@@ -114,7 +126,9 @@ class Mixed_7a(nn.Module):
         out = torch.cat((x0, x1, x2, x3), 1)
         return out
         
+
 class InceptionResnetV1(nn.Module):
+
     def __init__(self):
         super().__init__()
         self.conv2d_1a = ConvPlus(3, 32, 3, s=2)
@@ -160,7 +174,9 @@ class InceptionResnetV1(nn.Module):
         x = F.normalize(x, p=2, dim=1)
         return x
 
+
 class IncepResEncoder():
+
     def __init__(self, device, dataset='vggface2'):
         print('Initializing Inception-Resnet V1 model for face feature extraction')
         if dataset == 'casia-webface':

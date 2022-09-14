@@ -128,7 +128,7 @@ class MobileFaceNetEncoder():
         self.square = square
         self.lminp = lminp
     
-    def __call__(self, paths,):
+    def __call__(self, paths):
         images = [cv2.imread(p) for p in paths]
         if hasattr(self, 'landmarker'):
             images = [cv2.resize(img, (self.lminp, self.lminp)) for img in images]

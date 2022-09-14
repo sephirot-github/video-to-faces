@@ -10,8 +10,8 @@ try:
 except ImportError:
   HAS_DECORD = False
   
-from .utils import tqdm
-from .dupes import resize_face, remove_dupes_nearest, remove_dupes_overall
+from .utils import tqdm, resize_keep_ratio
+from .dupes import ahash, remove_dupes_nearest, remove_dupes_overall
 from .detectors import YOLOv3Detector, MTCNNDetector
 from .detectors import YOLOv3DetectorAnime
 
@@ -50,7 +50,7 @@ def detect_faces(files, model, vid_params, det_params, save_params, hash_thr):
         fnames.extend(fnames_k)
         hashes.extend(hashes_k)
 
-    if hash_thr and hashes:
+    if hash_thr:
         dup_params = ('hash', hash_thr, save_dupes, out_dir)
         _, fnames = remove_dupes_overall(np.stack(hashes), fnames, dup_params)
     
@@ -83,6 +83,7 @@ def process_video(path, model, vid_params, det_params, save_params, hash_thr):
     bgn = step if not video_fragment or video_fragment[0] < 0 else max(step, round(60 * video_fragment[0] * fps))
     end = lng if not video_fragment or video_fragment[1] < 0 else min(lng, round(60 * video_fragment[1] * fps + 1))
 
+    fnames = []
     hashes = []
     fi = list(range(bgn, end, step))
     pbar = tqdm(total=len(fi))
@@ -109,22 +110,22 @@ def process_video(path, model, vid_params, det_params, save_params, hash_thr):
         if video_area:
             cx1, cy1, cx2, cy2 = video_area
             frames = frames[:, cy1: cy2, cx1: cx2, :]
-        fnames, hashes = process_frames_batch(frames, bi, hashes, model, det_params, save_params, hash_thr)
+        fnames_b, hashes = process_frames_batch(frames, bi, model, det_params, save_params, hash_thr, hashes)
+        fnames.extend(fnames_b)
         pbar.update(len(bi))
     pbar.close()
     if not use_decord:
         cap.release()
-    return fnames, hashes
+    return fnames, [h for (h, fn) in hashes]
     
     
-def process_frames_batch(frames, indices, hashes, model, det_params, save_params, hash_thr):
+def process_frames_batch(frames, indices, model, det_params, save_params, hash_thr, hashes):
     """TBD"""
     _, mscore, msize, mborder, scale, square = det_params
     out_dir, out_prefix, resize_to, _, _, _ = save_params
     imsize = frames[0].shape[:2]
     # 1. Do a forward pass through detection network for a batch of frames, receive list[np.array(ndet, 5)] (len = batch_size)
-    with torch.no_grad():
-        boxes = model(frames)
+    boxes = model(frames)
     # 2. Remove boxes that don't satisfy specified basic conditions
     # Boxes' coordinates are rounded to int, each array becomes a list of tuples
     boxes = [filter_boxes(b, imsize, mscore, msize, mborder, save_params, f, i) for (b, f, i) in zip(boxes, frames, indices)] # list[list[tuple(int, int, int, int, float)]]
@@ -138,10 +139,9 @@ def process_frames_batch(frames, indices, hashes, model, det_params, save_params
     faces = [(img, out_prefix + '%06d_%u.jpg' % (i, j)) for (img, i, j) in faces]                     # list[(img, filename)]
     # 7. Resize all faces if needed
     if resize_to:
-        faces = [(resize_face(img, resize_to), fn) for (img, fn) in faces]
+        faces = [(resize_keep_ratio(img, resize_to), fn) for (img, fn) in faces]
     # 8. Remove all faces that are near-identical to one of the N preceeding faces (N = 5)
     if hash_thr:
-        [(img, hsh, fn) for (img, hsh, fn) in zip()]
         faces, hashes = remove_dupes_nearest(faces, hashes, hash_thr, save_params)
     # 9. Save results on disk
     for (img, fn) in faces:

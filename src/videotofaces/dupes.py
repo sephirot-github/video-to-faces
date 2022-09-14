@@ -5,6 +5,8 @@ import cv2
 import numpy as np
 import sklearn.metrics
 
+from .utils import resize_keep_ratio
+
 
 def ahash(img):
     """TBD"""
@@ -14,15 +16,6 @@ def ahash(img):
     return 1 * diff.flatten()
 
 
-def resize_face(img, resize_to):
-    """TBD"""
-    h, w = img.shape[:2]
-    scale = resize_to / max(h, w)
-    if scale < 1: # smaller images stay that way, no upscaling
-        img = cv2.resize(img, (int(w * scale), int(h * scale)))
-    return img
-    
-
 def remove_dupes_nearest(faces, hashes, hash_thr, save_params):
     """TBD"""
     out_dir, _, resize_to, _, _, save_dupes = save_params
@@ -31,7 +24,7 @@ def remove_dupes_nearest(faces, hashes, hash_thr, save_params):
         img, fn = faces[k]
         h = ahash(img)
         if not hashes:
-            hashes.append(h)
+            hashes.append((h, fn))
         else:
             diffs = [(np.count_nonzero(h != p), pfn) for (p, pfn) in hashes[-5:]]
             md, md_fn = min(diffs, key=lambda a: a[0])
@@ -39,10 +32,10 @@ def remove_dupes_nearest(faces, hashes, hash_thr, save_params):
             if md <= hash_thr:
                 idx.append(k)
                 if save_dupes:
-                    img = img if not resize_to else resize_face(img, resize_to)
+                    img = img if not resize_to else resize_keep_ratio(img, resize_to)
                     cv2.imwrite(osp.join(out_dir, 'intermediate', 'dupes1', fn), img)
             else:
-                hashes.append(h)
+                hashes.append((h, fn))
 
     if save_dupes:
         log_fn = osp.join(out_dir, 'intermediate', 'log_dupes1.csv')
