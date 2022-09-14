@@ -9,15 +9,15 @@ import sklearn.cluster
 
 from .utils import tqdm
 from .dupes import remove_dupes_overall
-from .models import MobileFaceNetEncoderIRL, IncepResEncoderIRL
+#from .models import MobileFaceNetEncoderIRL, IncepResEncoderIRL
 
 
 def get_encoder_model(style, enc_model, device):
     """TBD"""
     if enc_model == 'mbf':
-        return MobileFaceNetEncoderIRL(device, landmarker='mtcnn', minsize2=20)
+        return MobileFaceNetEncoder(device)
     elif enc_model == 'facenet':
-        return IncepResEncoderIRL(device)
+        return IncepResEncoder(device)
     #if style == 'anime':
     #    return vit_anime_encoder(device, enc_model == 'vit_l'), 128        
 

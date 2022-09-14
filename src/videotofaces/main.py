@@ -43,9 +43,8 @@ def video_to_faces(input_path=None, input_ext=None,
         imgpaths = get_paths_for_grouping(out_dir)
         if not imgpaths:
             return
-
     if mode == 'full' or mode == 'detection':
-        files = get_video_list(input, input_ext)
+        files = get_video_list(input_path, input_ext)
         if not files:
             return
         vid_params = (video_step, video_fragment, video_area, video_reader)

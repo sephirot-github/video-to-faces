@@ -160,7 +160,7 @@ class InceptionResnetV1(nn.Module):
         x = F.normalize(x, p=2, dim=1)
         return x
 
-class IncepResEncoderIRL():
+class IncepResEncoder():
     def __init__(self, device, dataset='vggface2'):
         print('Initializing Inception-Resnet V1 model for face feature extraction')
         if dataset == 'casia-webface':

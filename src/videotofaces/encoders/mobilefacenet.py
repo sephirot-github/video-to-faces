@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .mobilenet import MobileNetLandmarker
-from .mtcnn import MTCNNLandmarker
+from ..detectors import MTCNNLandmarker
 from ..utils import face_align
 from ..utils import prep_weights_file
 
@@ -118,7 +118,7 @@ def _adjust_weights_names(source, model, src):
         result[w] = source[names[i]]
     return result
     
-class MobileFaceNetEncoderIRL():
+class MobileFaceNetEncoder():
     def __init__(self, device, src='insightface', align=True, landmarker='mobilenet',
                  tform='similarity', square=True, lminp=192, minsize1=None, minsize2=None):
         if align:

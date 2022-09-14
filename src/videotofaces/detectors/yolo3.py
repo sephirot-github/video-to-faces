@@ -275,7 +275,7 @@ class YOLOv3DetectorAnime():
         return boxes
 
 
-def YOLOv3DetectorIRL():
+class YOLOv3Detector():
     """Returns YOLOv3 net with pre-trained weights, ready to detect faces
     Weights are converted from darknet file linked here: https://github.com/juliansprt/OpenCvSharpDNN
     to keras using a technique described here: https://github.com/chinmaykumar06/face-detection-yolov3-keras

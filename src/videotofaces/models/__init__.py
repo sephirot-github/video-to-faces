@@ -1,2 +1,0 @@
-from .mobilefacenet import MobileFaceNetEncoderIRL
-from .inception_resnet import IncepResEncoderIRL

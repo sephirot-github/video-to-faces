@@ -19,8 +19,8 @@ def get_detector_model(style, det_model, device):
     if style == 'anime':
         return YOLOv3DetectorAnime(device)
     elif det_model == 'mtcnn':
-        return MTCNNDetectorIRL(device)
-    return YOLOv3DetectorIRL(device)
+        return MTCNNDetector(device)
+    return YOLOv3Detector(device)
     
     
 def detect_faces(files, model, vid_params, det_params, save_params, hash_thr):
