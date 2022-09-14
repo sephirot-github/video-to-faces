@@ -9,7 +9,7 @@ import sklearn.cluster
 
 from .utils import tqdm
 from .dupes import remove_dupes_overall
-#from .models import MobileFaceNetEncoderIRL, IncepResEncoderIRL
+from .encoders import MobileFaceNetEncoder, IncepResEncoder
 
 
 def get_encoder_model(style, enc_model, device):

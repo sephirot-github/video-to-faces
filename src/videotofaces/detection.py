@@ -11,7 +11,9 @@ except ImportError:
   HAS_DECORD = False
   
 from .utils import tqdm
-from .dupes import remove_dupes_nearest, remove_dupes_overall
+from .dupes import resize_face, remove_dupes_nearest, remove_dupes_overall
+from .detectors import YOLOv3Detector, MTCNNDetector
+from .detectors import YOLOv3DetectorAnime
 
 
 def get_detector_model(style, det_model, device):
@@ -47,7 +49,7 @@ def detect_faces(files, model, vid_params, det_params, save_params, hash_thr):
         fnames_k, hashes_k = process_video(files[k], model, vid_params, det_params, save_params, hash_thr)
         fnames.extend(fnames_k)
         hashes.extend(hashes_k)
-    
+
     if hash_thr and hashes:
         dup_params = ('hash', hash_thr, save_dupes, out_dir)
         _, fnames = remove_dupes_overall(np.stack(hashes), fnames, dup_params)
@@ -78,8 +80,8 @@ def process_video(path, model, vid_params, det_params, save_params, hash_thr):
         fps = round(cap.get(cv2.CAP_PROP_FPS))
         c = 0
     step = round(fps * video_step)
-    bgn = step if not video_fragment or video_fragment[0] < 0 else max(step, 60 * video_fragment[0] * fps)
-    end = lng if not video_fragment or video_fragment[1] < 0 else min(lng, 60 * video_fragment[1] * fps + 1)
+    bgn = step if not video_fragment or video_fragment[0] < 0 else max(step, round(60 * video_fragment[0] * fps))
+    end = lng if not video_fragment or video_fragment[1] < 0 else min(lng, round(60 * video_fragment[1] * fps + 1))
 
     hashes = []
     fi = list(range(bgn, end, step))
@@ -139,6 +141,7 @@ def process_frames_batch(frames, indices, hashes, model, det_params, save_params
         faces = [(resize_face(img, resize_to), fn) for (img, fn) in faces]
     # 8. Remove all faces that are near-identical to one of the N preceeding faces (N = 5)
     if hash_thr:
+        [(img, hsh, fn) for (img, hsh, fn) in zip()]
         faces, hashes = remove_dupes_nearest(faces, hashes, hash_thr, save_params)
     # 9. Save results on disk
     for (img, fn) in faces:
@@ -152,15 +155,6 @@ def get_crops(img, boxes):
     return [img[y1: y2, x1: x2] for (x1, y1, x2, y2, _) in boxes]
 
     
-def resize_face(img, resize_to):
-    """TBD"""
-    h, w = img.shape[:2]
-    scale = resize_to / max(h, w)
-    if scale < 1: # smaller images stay that way, no upscaling
-        img = cv2.resize(img, (int(w * scale), int(h * scale)))
-    return img
-
-
 def check_box(box, img_size, mscore, msize, mborder):
     """TBD"""
     x1, y1, x2, y2, score = box
