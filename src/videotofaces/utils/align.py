@@ -5,6 +5,7 @@ def face_align(images, landmarks, tform_type, square):
     size = images[0].shape[0]
     # 0: left eye, 1: right eye, 2: nose tip, 3: mouth left corner, 4: mouth right corner
     # https://github.com/deepinsight/insightface/issues/1286
+    # plus 8 for going from [96, 112] to [112, 112] is included
     lm_dst = np.array([[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.7366], [41.5493, 92.3655], [70.7299, 92.2041]], dtype=np.float64)
     if not square:
         lm_dst[:, 0] -= 8
@@ -23,10 +24,10 @@ def face_align(images, landmarks, tform_type, square):
     return images
 
 def estimate_similarity(P1, P2):
-    '''estimates similarity transformation by SVD (singular value decomposition) using Umeyama algorithm:
-       https://web.stanford.edu/class/cs273/refs/umeyama.pdf (eq. 34-43)
-       adapted from: https://github.com/scikit-image/scikit-image/blob/main/skimage/transform/_geometric.py#L91
-       equivalent to: import skimage.transform; tform = skimage.transform.SimilarityTransform(); tform.estimate(P1, P2); return tform.params[:2]'''
+    """Estimates similarity transformation by SVD (singular value decomposition) using Umeyama algorithm:
+    https://web.stanford.edu/class/cs273/refs/umeyama.pdf (eq. 34-43)
+    adapted from: https://github.com/scikit-image/scikit-image/blob/main/skimage/transform/_geometric.py#L91
+    equivalent to: import skimage.transform; tform = skimage.transform.SimilarityTransform(); tform.estimate(P1, P2); return tform.params[:2]"""
     n, m = P1.shape # 5, 2
     E1 = np.mean(P1, axis=0)
     E2 = np.mean(P2, axis=0)
@@ -49,13 +50,13 @@ def estimate_similarity(P1, P2):
     return np.hstack([R * c, t[:, None]])
 
 def estimate_affine(P1, P2):
-    '''estimates affine transformation by solving a linear matrix equation like this
-         [[x1 y1 1]              [[x1n y1n 1]
-          [x2 y2 1]   [[a0 b0 0]  [x2n y2n 1]
-          [x3 y3 1] @ [a1 b1 0] = [x3n y3n 1]
-          [x4 y4 1]   [a2 b2 1]]  [x4n y4n 1]
-          [x5 y5 1]]              [x5n y5n 1]]
-       adapted from: https://github.com/foamliu/MobileFaceNet/blob/master/align_faces.py#L117'''
+    """Estimates affine transformation by solving a linear matrix equation like this
+    [[x1 y1 1]              [[x1n y1n 1]
+     [x2 y2 1]  [[a0 b0 0]   [x2n y2n 1]
+     [x3 y3 1] @ [a1 b1 0] = [x3n y3n 1]
+     [x4 y4 1]   [a2 b2 1]]  [x4n y4n 1]
+     [x5 y5 1]]              [x5n y5n 1]]
+    adapted from: https://github.com/foamliu/MobileFaceNet/blob/master/align_faces.py#L117"""
     ones = np.ones((P1.shape[0], 1), P1.dtype)
     P1 = np.hstack([P1, ones])
     P2 = np.hstack([P2, ones])

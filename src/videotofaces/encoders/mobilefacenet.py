@@ -119,21 +119,18 @@ def _adjust_weights_names(source, model, src):
     return result
     
 class MobileFaceNetEncoder():
-    def __init__(self, device, src='insightface', align=True, landmarker='mobilenet',
-                 tform='similarity', square=True, lminp=192, minsize1=None, minsize2=None):
+    def __init__(self, device, src='insightface', align=True, landmarker='mobilenet', tform='similarity'):
         if align:
-            self.landmarker = MobileNetLandmarker(device) if landmarker == 'mobilenet' else MTCNNLandmarker(device, minsize1, minsize2)
+            self.landmarker = MobileNetLandmarker(device) if landmarker == 'mobilenet' else MTCNNLandmarker(device)
         self.encoder = get_mbf_pretrained(device, src)
         self.tform = tform
-        self.square = square
-        self.lminp = lminp
     
     def __call__(self, paths):
         images = [cv2.imread(p) for p in paths]
         if hasattr(self, 'landmarker'):
-            images = [cv2.resize(img, (self.lminp, self.lminp)) for img in images]
+            images = [cv2.resize(img, (192, 192)) for img in images]
             lm = self.landmarker(images)
-            images = face_align(images, lm, self.tform, self.square)
+            images = face_align(images, lm, self.tform, True)
         inp = cv2.dnn.blobFromImages(images, 1 / 127.5, (112, 112), (127.5, 127.5, 127.5), swapRB=True)
         inp = torch.from_numpy(inp)
         with torch.no_grad():

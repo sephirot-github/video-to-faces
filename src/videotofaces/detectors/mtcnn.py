@@ -371,7 +371,7 @@ class MTCNNDetector():
 class MTCNNLandmarker():
     """TBD"""
 
-    def __init__(self, device, minsize1=None, minsize2=None):
+    def __init__(self, device):
         """TBD"""
         print('Initializing MTCNN model for landmark detection')
         wf = prep_weights_file('https://drive.google.com/uc?id=1qHW1xoTvuqlUBBhPx1ZLpzUXrWHfW1jN', 'mtcnn_facenet.pt', gdrive=True)
@@ -379,26 +379,21 @@ class MTCNNLandmarker():
         self.model = MTCNN().to(device)
         self.model.load_state_dict(wd)
         self.model.eval()
-        self.minsize1 = minsize1
-        self.minsize2 = minsize2
     
     def __call__(self, images):
         """Input: list[H, W, 3] of raw numpy arrays as obtained by cv2.imread() OR [bs, H, W, 3] array obtained by calling np.stack() on the same list"""
         images = np.stack(images)
         size = min(images.shape[1:3])
-        minsize1 = self.minsize1 if self.minsize1 else size // 2
-        minsize2 = self.minsize2 if self.minsize2 else size // 4
         with torch.no_grad():
-            _, lm = self.model(images, minsize1, return_landmarks=True)
+            _, lm = self.model(images, size // 2, return_landmarks=True)
         eidx = [i for i, lmk in enumerate(lm) if lmk.size == 0]
         if eidx:
-            #print('half:', len(eidx), eidx)
+            # for imgs where nothing found, try again with default minsize (20)
             with torch.no_grad():
-                _, lm2 = self.model(images[eidx], minsize2, return_landmarks=True)
+                _, lm2 = self.model(images[eidx], return_landmarks=True)
             for i in range(len(eidx)):
                 lm[eidx[i]] = lm2[i]
         lm = [lmk[0] if lmk.size > 0 else np.zeros((5, 2)) for lmk in lm]
-        #print('empty:', len([lmk for lmk in lm if not lmk.any()]))
         lm = np.stack(lm)
         return lm.round().astype(int)
 

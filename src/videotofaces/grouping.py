@@ -16,8 +16,10 @@ def get_encoder_model(style, enc_model, device):
     """TBD"""
     if style == 'anime':
         return VitEncoderAnime(device, enc_model == 'vit_l')
-    elif enc_model == 'mbf':
-        return MobileFaceNetEncoder(device)
+    elif enc_model.startswith('mbf'):
+        s = enc_model.split(':')
+        source = 'insightface' if len(s) == 1 else s[1]
+        return MobileFaceNetEncoder(device, src=source)
     elif enc_model == 'facenet':
         return IncepResEncoder(device)  
 
