@@ -59,9 +59,10 @@ class MobileNetLandmarker():
         self.model.eval()
     
     def __call__(self, images):
-        input = cv2.dnn.blobFromImages(images, 1 / 128, (192, 192), (127.5, 127.5, 127.5), swapRB=True)
+        inp = cv2.dnn.blobFromImages(images, 1 / 128, (192, 192), (127.5, 127.5, 127.5), swapRB=True)
+        inp = torch.from_numpy(inp).to(next(self.model.parameters()).device)
         with torch.no_grad():
-            lm = self.model(torch.from_numpy(input)).numpy()
+            lm = self.model(inp).cpu().numpy()
         lm = lm.reshape(-1, 106, 2)
         lm = lm[:, [38, 88, 86, 52, 61], :]
         lm = (lm + 1) * (192 // 2)

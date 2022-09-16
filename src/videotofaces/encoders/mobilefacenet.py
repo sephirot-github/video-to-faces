@@ -122,7 +122,7 @@ class MobileFaceNetEncoder():
     def __init__(self, device, src='insightface', align=True, landmarker='mobilenet', tform='similarity'):
         if align:
             self.landmarker = MobileNetLandmarker(device) if landmarker == 'mobilenet' else MTCNNLandmarker(device)
-        self.encoder = get_mbf_pretrained(device, src)
+        self.model = get_mbf_pretrained(device, src)
         self.tform = tform
     
     def __call__(self, images):
@@ -131,9 +131,9 @@ class MobileFaceNetEncoder():
             lm = self.landmarker(images)
             images = face_align(images, lm, self.tform)
         inp = cv2.dnn.blobFromImages(images, 1 / 127.5, (112, 112), (127.5, 127.5, 127.5), swapRB=True)
-        inp = torch.from_numpy(inp)
+        inp = torch.from_numpy(inp).to(next(self.model.parameters()).device)
         with torch.no_grad():
-            return self.encoder(inp).cpu().numpy()
+            return self.model(inp).cpu().numpy()
 
 # ==================== EXTRA / NOTES ====================
 

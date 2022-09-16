@@ -165,7 +165,7 @@ class MTCNN(nn.Module):
 
     def _get_cropped_candidates(self, x, imgidx, boxes, size):
         H, W = x.shape[2:4]
-        l = [torch.zeros([0, x.shape[1], *size])]
+        l = [torch.zeros([0, x.shape[1], *size], device=x.device)]
         for k in range(boxes.shape[0]):
             x1, y1, x2, y2 = boxes[k]
             x1, y1, x2, y2 = max(1, int(x1)), max(1, int(y1)), min(W, int(x2)), min(H, int(y2))

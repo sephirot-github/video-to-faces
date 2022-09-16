@@ -145,6 +145,7 @@ class ViT(nn.Module):
 
 
 class VitEncoder():
+
     def __init__(self, device, isP12S8, classify=False):
         num_cls = None if not classify else 93431
         if isP12S8:
@@ -187,7 +188,6 @@ class VitEncoder():
         print()
     
     def __call__(self, images):
-        # TBD
         return None
         
     

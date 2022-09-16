@@ -120,7 +120,7 @@ class IResNetEncoder():
             lm = self.landmarker(images)
             images = face_align(images, lm, self.tform)
         inp = cv2.dnn.blobFromImages(images, 1 / 127.5, (112, 112), (127.5, 127.5, 127.5), swapRB=True)
-        inp = torch.from_numpy(inp)
+        inp = torch.from_numpy(inp).to(next(self.model.parameters()).device)
         with torch.no_grad():
             out = self.model(inp)
         return out.cpu().numpy()
@@ -134,13 +134,13 @@ class ONNXIResNetEncoder():
     
     def __init__(self, device):
         import onnxruntime
-        import numpy as np
         modelfile = prep_weights_file('https://drive.google.com/uc?id=1AhyD9Zjwy5MZgJIjj2Pb-YfIdeFS3T5E', 'w600k_r50.onnx', gdrive=True)
         self.landmarker = MobileNetLandmarker(device)
         self.session = onnxruntime.InferenceSession(modelfile, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.inpname = self.session.get_inputs()[0].name
 
     def __call__(self, images):
+        import numpy as np
         images = [cv2.resize(img, (192, 192)) for img in images]
         lm = self.landmarker(images)
         images = face_align(images, lm, 'similarity')

@@ -195,7 +195,7 @@ class IncepResEncoder():
     def __call__(self, images):
         """TBD"""
         inp = cv2.dnn.blobFromImages(images, 1 / 128, (160, 160), (127.5, 127.5, 127.5), swapRB=True)
-        inp = torch.from_numpy(inp)
+        inp = torch.from_numpy(inp).to(next(self.model.parameters()).device)
         with torch.no_grad():
             out = self.model(inp)
         return out.cpu().numpy()
