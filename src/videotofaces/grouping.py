@@ -7,7 +7,7 @@ import numpy as np
 import sklearn.metrics
 import sklearn.cluster
 
-from .utils import tqdm
+from .utils import tqdm, crop_to_area
 from .dupes import remove_dupes_overall
 from .encoders import MobileFaceNetEncoder, IncepResEncoder
 from .encoders import VitEncoderAnime
@@ -24,13 +24,16 @@ def get_encoder_model(style, enc_model, device):
         return IncepResEncoder(device)  
 
 
-def encode_faces(paths, model, bs):
+def encode_faces(paths, model, bs, area):
     """TBD"""
     print('Extracting features from images for grouping')
     x = []
     with tqdm(total=len(paths)) as pbar:
         for bn in range(len(paths) // bs + 1):
-            xk = model(paths[bs*bn:bs*(bn+1)])
+            images = [cv2.imread(p) for p in paths[bs*bn:bs*(bn+1)]]
+            if area:
+                images = [crop_to_area(img, area) for img in images]
+            xk = model(images)
             x.append(xk)
             pbar.update(xk.shape[0])
     return np.concatenate(x)
@@ -39,7 +42,8 @@ def encode_faces(paths, model, bs):
 def encode_refs(refs, model):
     """TBD"""
     rpaths = [ps[0] for (_, ps) in refs]
-    r = model(rpaths)
+    rimages = [cv2.imread(p) for p in rpaths]
+    r = model(rimages)
     return r
 
     
@@ -136,10 +140,10 @@ def cluster_faces(paths, X, cluster_params):
 
 def test_grouping(paths, refs, test_params):
     """TBD"""
-    style, mname, device, out_dir, exclude_other, bs, thr, rstate = test_params
+    style, mname, device, out_dir, exclude_other, bs, area, thr, rstate = test_params
     gt, paths, n_clusters = get_ground_truths(paths, out_dir, exclude_other)
     model = get_encoder_model(style, mname, device)
-    X = encode_faces(paths, model, bs)
+    X = encode_faces(paths, model, bs, area)
     R = encode_refs(refs, model)
     
     inds, _ = classify(X, R, [c for (c, _) in refs], None if exclude_other else thr, True, paths, out_dir)

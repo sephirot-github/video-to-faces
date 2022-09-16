@@ -125,8 +125,7 @@ class MobileFaceNetEncoder():
         self.encoder = get_mbf_pretrained(device, src)
         self.tform = tform
     
-    def __call__(self, paths):
-        images = [cv2.imread(p) for p in paths]
+    def __call__(self, images):
         if hasattr(self, 'landmarker'):
             images = [cv2.resize(img, (192, 192)) for img in images]
             lm = self.landmarker(images)

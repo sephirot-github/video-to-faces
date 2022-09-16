@@ -16,7 +16,7 @@ def video_to_faces(input_path=None, input_ext=None,
                    video_step=1, video_fragment=None, video_area=None, video_reader='opencv',
                    det_model='yolo', det_batch_size=32, det_min_score=0.6, det_min_size=100, det_min_border=5, det_scale=(1.5, 1.5, 2.2, 1.2), det_square=True,
                    hash_thr=8,
-                   enc_model='vit_l', enc_batch_size=128,
+                   enc_model='vit_l', enc_batch_size=128, enc_area=None,
                    group_mode='clustering', clusters=None, clusters_save_all=False, ref_dir=None, random_state=0, group_log=True,
                    enc_dup_thr=0.5, enc_oth_thr=1.5,
                    _test_enc=False, _test_exclude_other=False
@@ -56,11 +56,11 @@ def video_to_faces(input_path=None, input_ext=None,
 
     if (mode == 'full' or mode == 'grouping') and imgpaths:
         if _test_enc:
-            test_params = (style, enc_model, device, out_dir, _test_exclude_other, enc_batch_size, enc_oth_thr, random_state)
+            test_params = (style, enc_model, device, out_dir, _test_exclude_other, enc_batch_size, enc_area, enc_oth_thr, random_state)
             test_grouping(imgpaths, refs, test_params)
             return
         encoder = get_encoder_model(style, enc_model, device)
-        features = encode_faces(imgpaths, encoder, enc_batch_size)
+        features = encode_faces(imgpaths, encoder, enc_batch_size, enc_area)
         if enc_dup_thr:
             dup_params = ('enc', enc_dup_thr, save_dupes, out_dir)
             features, _ = remove_dupes_overall(features, imgpaths, dup_params)

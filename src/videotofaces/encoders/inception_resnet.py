@@ -191,9 +191,8 @@ class IncepResEncoder():
         self.model.eval()
         print()
     
-    def __call__(self, paths):
-        ims = [cv2.imread(p) for p in paths]
-        inp = cv2.dnn.blobFromImages(ims, 1 / 128, (160, 160), (127.5, 127.5, 127.5), swapRB=True)
+    def __call__(self, images):
+        inp = cv2.dnn.blobFromImages(images, 1 / 128, (160, 160), (127.5, 127.5, 127.5), swapRB=True)
         inp = torch.from_numpy(inp)
         with torch.no_grad():
             out = self.model(inp)
