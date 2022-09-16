@@ -178,6 +178,7 @@ class InceptionResnetV1(nn.Module):
 class IncepResEncoder():
 
     def __init__(self, device, dataset='vggface2'):
+        """TBD"""
         print('Initializing Inception-Resnet V1 model for face feature extraction')
         if dataset == 'casia-webface':
             wf = prep_weights_file('https://github.com/timesler/facenet-pytorch/releases/download/v2.2.9/20180408-102900-casia-webface.pt', '20180408-102900-casia-webface.pt')
@@ -192,6 +193,7 @@ class IncepResEncoder():
         print()
     
     def __call__(self, images):
+        """TBD"""
         inp = cv2.dnn.blobFromImages(images, 1 / 128, (160, 160), (127.5, 127.5, 127.5), swapRB=True)
         inp = torch.from_numpy(inp)
         with torch.no_grad():

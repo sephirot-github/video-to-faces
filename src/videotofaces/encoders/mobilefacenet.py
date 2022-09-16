@@ -129,7 +129,7 @@ class MobileFaceNetEncoder():
         if hasattr(self, 'landmarker'):
             images = [cv2.resize(img, (192, 192)) for img in images]
             lm = self.landmarker(images)
-            images = face_align(images, lm, self.tform, True)
+            images = face_align(images, lm, self.tform)
         inp = cv2.dnn.blobFromImages(images, 1 / 127.5, (112, 112), (127.5, 127.5, 127.5), swapRB=True)
         inp = torch.from_numpy(inp)
         with torch.no_grad():

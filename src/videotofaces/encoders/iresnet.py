@@ -1,12 +1,21 @@
+import cv2
 import torch
 from torch import nn
 import torch.nn.functional as F
 
+from .mobilenet import MobileNetLandmarker
+from ..detectors import MTCNNLandmarker
+from ..utils import face_align
+from ..utils import prep_weights_file
+
 # https://github.com/deepinsight/insightface/blob/master/recognition/arcface_torch/backbones/iresnet.py
 # https://arxiv.org/abs/2004.04989
 
+
 class IRNBlock(nn.Module):
+
     def __init__(self, cin, cout, stride=1):
+        """TBD"""
         super(IRNBlock, self).__init__()
         self.bn1 = nn.BatchNorm2d(cin)
         self.conv1 = nn.Conv2d(cin, cout, 3, padding=1, bias=False)
@@ -18,6 +27,7 @@ class IRNBlock(nn.Module):
             self.downsample = nn.Sequential(nn.Conv2d(cin, cout, 1, stride, bias=False), nn.BatchNorm2d(cout))
 
     def forward(self, x):
+        """TBD"""
         y = x if not hasattr(self, 'downsample') else self.downsample(x)
         x = self.bn1(x)
         x = self.conv1(x)
@@ -27,8 +37,11 @@ class IRNBlock(nn.Module):
         x = self.bn3(x)
         return x + y
 
+
 class IResNet(nn.Module):
+
     def __init__(self, layers):
+        """TBD"""
         super(IResNet, self).__init__()
         self.conv1 = nn.Conv2d(3, 64, 3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
@@ -51,6 +64,7 @@ class IResNet(nn.Module):
         #        nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
+        """TBD"""
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.prelu(x)
@@ -66,18 +80,71 @@ class IResNet(nn.Module):
         x = F.normalize(x, p=2, dim=1)
         return x
 
-def iresnet18(): return IResNet([2, 2, 2, 2])
-def iresnet34(): return IResNet([3, 4, 6, 3])
-def iresnet50(): return IResNet([3, 4, 14, 3])
-def iresnet100(): return IResNet([3, 13, 30, 3])
-def iresnet200(): return IResNet([6, 26, 60, 6])
 
-def iresnet_irl_encoder(device, architecture, weights_file):
-    if architecture == 18: model = iresnet18().to(device)
-    if architecture == 34: model = iresnet34().to(device)
-    if architecture == 50: model = iresnet50().to(device)
-    if architecture == 100: model = iresnet100().to(device)
-    weights = torch.load(weights_file, map_location=torch.device(device))
-    model.load_state_dict(weights)
-    model.eval()
-    return model
+class IResNetEncoder():
+
+    architecture = {
+        'IResNet18': [2, 2, 2, 2],
+        'IResNet34': [3, 4, 6, 3],
+        'IResNet50': [3, 4, 14, 3],
+        'IResNet100': [3, 13, 30, 3],
+        'IResNet200': [6, 26, 60, 6]
+    }
+    options = {
+        'glint360k_r18': ('IResNet18', '1-fmCdluzOGEMUFBQeIv_HJiVwAuosrZF', 'glint360k_cosface_r18_fp16_0.1_backbone.pth'),
+        'glint360k_r34': ('IResNet34', '16sPIRJGgof6WoERFqMVg9llID6mSMoym', 'glint360k_cosface_r34_fp16_0.1_backbone.pth'),
+        'glint360k_r50': ('IResNet50', '1UYIZkHTklpFMGLhFGzzCvUZS-rMLY4Xv', 'glint360k_cosface_r50_fp16_0.1_backbone.pth'),
+        'glint360k_r100': ('IResNet100', '1nwZhK33-5KwE8nyKWlBr8zDm0Tx3PYQ9', 'glint360k_cosface_r100_fp16_0.1_backbone.pth'),
+        'glint360k_r50_pfc': ('IResNet50', '1eBTfk0Ozsx0hF0l1z06mlzC6mOLxTscK', 'partial_fc_glint360k_r50_insightface.pth'),
+        'glint360k_r100_pfc': ('IResNet100', '1XNMRpB0MydK1stiljHoe4vKz4WfNCAIG', 'partial_fc_glint360k_r100_insightface.pth')
+    }
+
+    def __init__(self, device, source, align=True, landmarker='mobilenet', tform='similarity'):
+        """https://github.com/deepinsight/insightface/tree/master/recognition/partial_fc#5-pretrain-models
+        https://github.com/deepinsight/insightface/tree/master/recognition/arcface_torch#model-zoo"""
+        opt = self.options[source]
+        print('Initializing %s model for face feature extraction' % opt[0])
+        if align:
+            self.landmarker = MobileNetLandmarker(device) if landmarker == 'mobilenet' else MTCNNLandmarker(device)
+            self.tform = tform
+        wf = prep_weights_file('https://drive.google.com/uc?id=%s' % opt[1], opt[2], gdrive=True)
+        wd = torch.load(wf, map_location=torch.device(device))
+        self.model = IResNet(self.architecture[opt[0]]).to(device)
+        self.model.load_state_dict(wd)
+        self.model.eval()
+        print()
+
+    def __call__(self, images):
+        if hasattr(self, 'landmarker'):
+            images = [cv2.resize(img, (192, 192)) for img in images]
+            lm = self.landmarker(images)
+            images = face_align(images, lm, self.tform)
+        inp = cv2.dnn.blobFromImages(images, 1 / 127.5, (112, 112), (127.5, 127.5, 127.5), swapRB=True)
+        inp = torch.from_numpy(inp)
+        with torch.no_grad():
+            out = self.model(inp)
+        return out.cpu().numpy()
+
+
+# ==================== EXTRA ====================
+
+class ONNXIResNetEncoder():
+    # !pip install onnxruntime
+    # !pip install onnxruntime-gpu
+    
+    def __init__(self, device):
+        import onnxruntime
+        import numpy as np
+        modelfile = prep_weights_file('https://drive.google.com/uc?id=1AhyD9Zjwy5MZgJIjj2Pb-YfIdeFS3T5E', 'w600k_r50.onnx', gdrive=True)
+        self.landmarker = MobileNetLandmarker(device)
+        self.session = onnxruntime.InferenceSession(modelfile, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        self.inpname = self.session.get_inputs()[0].name
+
+    def __call__(self, images):
+        images = [cv2.resize(img, (192, 192)) for img in images]
+        lm = self.landmarker(images)
+        images = face_align(images, lm, 'similarity')
+        images = cv2.dnn.blobFromImages(images, 1 / 127.5, (112, 112), (127.5, 127.5, 127.5), swapRB=True)
+        x = self.session.run(None, {self.inpname: images})[0]
+        x = x / np.linalg.norm(x, axis=1).reshape(-1, 1)
+        return x

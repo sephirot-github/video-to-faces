@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-def face_align(images, landmarks, tform_type, square):
+def face_align(images, landmarks, tform_type, square=True):
     size = images[0].shape[0]
     # 0: left eye, 1: right eye, 2: nose tip, 3: mouth left corner, 4: mouth right corner
     # https://github.com/deepinsight/insightface/issues/1286
