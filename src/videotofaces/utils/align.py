@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 
+
 def face_align(images, landmarks, tform_type, square=True):
     size = images[0].shape[0]
     # 0: left eye, 1: right eye, 2: nose tip, 3: mouth left corner, 4: mouth right corner
@@ -22,6 +23,7 @@ def face_align(images, landmarks, tform_type, square=True):
         if not square:
             images[k] = images[k][:, :int(96*scale+1)]
     return images
+
 
 def estimate_similarity(P1, P2):
     """Estimates similarity transformation by SVD (singular value decomposition) using Umeyama algorithm:
@@ -49,6 +51,7 @@ def estimate_similarity(P1, P2):
     t = E2 - c * R @ E1
     return np.hstack([R * c, t[:, None]])
 
+
 def estimate_affine(P1, P2):
     """Estimates affine transformation by solving a linear matrix equation like this
     [[x1 y1 1]              [[x1n y1n 1]
@@ -62,6 +65,7 @@ def estimate_affine(P1, P2):
     P2 = np.hstack([P2, ones])
     A, _, _, _ = np.linalg.lstsq(P1, P2, rcond=None)
     return A.T[:2]
+    
     
 # ==================== NOTES ====================
 

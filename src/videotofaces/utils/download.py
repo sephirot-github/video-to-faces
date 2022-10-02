@@ -3,7 +3,8 @@ import os.path as osp
 import re
 import requests
 
-from . import tqdm
+from .pbar import tqdm
+
 
 def url_download(url, dst, gdrive=False):
     # adapted from https://stackoverflow.com/questions/38511444/python-download-files-from-google-drive-using-url
@@ -35,6 +36,7 @@ def url_download(url, dst, gdrive=False):
                     pbar.update(len(chunk))
     finally:
         session.close()
+
 
 def prep_weights_file(url, fn, gdrive=False):
     home = osp.dirname(osp.dirname(osp.realpath(__file__))) if '__file__' in globals() else os.getcwd()
