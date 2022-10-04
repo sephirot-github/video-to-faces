@@ -3,7 +3,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from .mobilenet import MobileNetLandmarker
+#from ..detectors.coord_reg import CoordRegLandmarker
 from ..detectors import MTCNNLandmarker
 from ..utils import face_align
 from ..utils import prep_weights_file
@@ -105,7 +105,7 @@ class IResNetEncoder():
         opt = self.options[source]
         print('Initializing %s model for face feature extraction' % opt[0])
         if align:
-            self.landmarker = MobileNetLandmarker(device) if landmarker == 'mobilenet' else MTCNNLandmarker(device)
+            self.landmarker = CoordRegLandmarker(device) if landmarker == 'mobilenet' else MTCNNLandmarker(device)
             self.tform = tform
         wf = prep_weights_file('https://drive.google.com/uc?id=%s' % opt[1], opt[2], gdrive=True)
         wd = torch.load(wf, map_location=torch.device(device))
@@ -135,7 +135,7 @@ class ONNXIResNetEncoder():
     def __init__(self, device):
         import onnxruntime
         modelfile = prep_weights_file('https://drive.google.com/uc?id=1AhyD9Zjwy5MZgJIjj2Pb-YfIdeFS3T5E', 'w600k_r50.onnx', gdrive=True)
-        self.landmarker = MobileNetLandmarker(device)
+        self.landmarker = CoordRegLandmarker(device)
         self.session = onnxruntime.InferenceSession(modelfile, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.inpname = self.session.get_inputs()[0].name
 

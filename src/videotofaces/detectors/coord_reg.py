@@ -2,60 +2,43 @@ import cv2
 import torch
 import torch.nn as nn
 
-from ..utils import prep_weights_file
+from ..backbones.mobilenet import MobileNetV1, ConvUnit
+from ..utils.download import prep_weights_file
 
-# https://arxiv.org/abs/1704.04861
-# https://github.com/deepinsight/insightface/tree/master/alignment/coordinate_reg
-
-class ConvUnit(nn.Module):
-    def __init__(self, cin, cout, k, s, p, grp=1, relu=True):
-        super(ConvUnit, self).__init__()
-        cin, cout, grp = int(cin), int(cout), int(grp)
-        self.conv = nn.Conv2d(cin, cout, k, s, p, groups=grp, bias=False)
-        self.bn = nn.BatchNorm2d(cout, eps=0.001)
-        self.relu = nn.PReLU(cout)
-    def forward(self, x):
-        x = self.conv(x)
-        x = self.bn(x)
-        x = self.relu(x)
-        return x
-
-class MobileNet(nn.Module):
-    def __init__(self, width_multiplier=1):
-        super(MobileNet, self).__init__()
-        a = width_multiplier
-        self.main = nn.Sequential(
-            ConvUnit(3, 32*a, 3, 2, 1),
-            ConvUnit(32*a, 32*a, 3, 1, 1, grp=32*a), ConvUnit(32*a, 64*a, 1, 1, 0),
-            ConvUnit(64*a, 64*a, 3, 2, 1, grp=64*a), ConvUnit(64*a, 128*a, 1, 1, 0),
-            ConvUnit(128*a, 128*a, 3, 1, 1, grp=128*a), ConvUnit(128*a, 128*a, 1, 1, 0),
-            ConvUnit(128*a, 128*a, 3, 2, 1, grp=128*a), ConvUnit(128*a, 256*a, 1, 1, 0),
-            ConvUnit(256*a, 256*a, 3, 1, 1, grp=256*a), ConvUnit(256*a, 256*a, 1, 1, 0),
-            ConvUnit(256*a, 256*a, 3, 2, 1, grp=256*a), ConvUnit(256*a, 512*a, 1, 1, 0),
-            *[el for tup in [(ConvUnit(512*a, 512*a, 3, 1, 1, grp=512*a), ConvUnit(512*a, 512*a, 1, 1, 0)) for _ in range(5)] for el in tup],
-            ConvUnit(512*a, 512*a, 3, 2, 1, grp=512*a), ConvUnit(512*a, 1024*a, 1, 1, 0),
-            ConvUnit(1024*a, 1024*a, 3, 1, 1, grp=1024*a), ConvUnit(1024*a, 1024*a, 1, 1, 0)
-        )
-        self.outro = nn.Sequential(
-            ConvUnit(1024*a, 128*a, 3, 2, 1),
-            nn.Flatten(),
-            nn.Linear(int(128*a)*3*3, 212)
-        )
-    def forward(self, x):
-        x = self.main(x)
-        x = self.outro(x)
-        return x
-        
+# https://github.com/deepinsight/insightface/tree/master/alignment/coordinate_reg        
 # https://github.com/deepinsight/insightface/tree/master/model_zoo#21-2d-face-alignment
 # https://github.com/nttstar/insightface-resources/blob/master/alignment/images/2d106markup.jpg
 
-class MobileNetLandmarker():
+
+class MobileNetCR(nn.Module):
+
+    def __init__(self):
+        super(MobileNetCR, self).__init__()
+        self.body = MobileNetV1(0.5)
+        self.head = nn.Sequential(
+            ConvUnit(512, 64, 3, 2, 1),
+            nn.Flatten(),
+            nn.Linear(64*3*3, 212)
+        )
+
+    def forward(self, x):
+        x = self.body(x)
+        x = self.head(x)
+        return x
+
+
+class CoordRegLandmarker():
+
     def __init__(self, device):
-        print('Initializing MobileNet model for landmark detection')
-        self.model = MobileNet(0.5).to(device)
+        print('Initializing coordinate regression model for landmark detection')
+        self.model = MobileNetCR().to(device)
         wf = prep_weights_file('https://drive.google.com/uc?id=1H1-KkskDrQvQ_J_bFLxZeie6YvTfB7KE', 'mbnet_2d106det_insightface.pt', gdrive=True)
-        wd = torch.load(wf, map_location=torch.device(device))
-        self.model.load_state_dict(wd)
+        wd_src = torch.load(wf, map_location=torch.device(device))
+        wd_dst = {}
+        names = list(wd_src)
+        for i, w in enumerate(list(self.model.state_dict())):
+            wd_dst[w] = wd_src[names[i]]
+        self.model.load_state_dict(wd_dst)
         self.model.eval()
     
     def __call__(self, images):
@@ -68,6 +51,7 @@ class MobileNetLandmarker():
         lm = (lm + 1) * (192 // 2)
         lm = lm.round().astype(int)
         return lm
+
 
 # ==================== EXTRA / NOTES ====================
 
@@ -104,7 +88,7 @@ def convert_weights_2d106det_insightface():
     match.append('fc1_weight')
     match.append('fc1_bias')
 
-    model = MobileNet(0.5)
+    model = MobileNetV1(0.5)
     dst = model.state_dict()
     for i, w in enumerate(dst):
         if w.endswith('.num_batches_tracked'):

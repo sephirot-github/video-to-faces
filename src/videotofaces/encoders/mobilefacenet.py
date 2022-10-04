@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .mobilenet import MobileNetLandmarker
+from ..detectors.coord_reg import CoordRegLandmarker
 from ..detectors import MTCNNLandmarker
 from ..utils import face_align
 from ..utils import prep_weights_file

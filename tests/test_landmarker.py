@@ -4,13 +4,13 @@ import unittest
 import cv2
 import numpy as np
 
-from videotofaces.encoders.mobilenet import MobileNetLandmarker
+from videotofaces.detectors.coord_reg import CoordRegLandmarker
 
 
 class TestLandmarker(unittest.TestCase):
 
     def test1(self):
-        model = MobileNetLandmarker('cpu')
+        model = CoordRegLandmarker('cpu')
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [
             cv2.imread(osp.join(testdir, 'images', '00360_0.jpg')),
