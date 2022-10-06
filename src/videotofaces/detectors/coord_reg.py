@@ -2,7 +2,8 @@ import cv2
 import torch
 import torch.nn as nn
 
-from ..backbones.mobilenet import MobileNetV1, ConvUnit
+from ..backbones.basic import ConvUnit
+from ..backbones.mobilenet import MobileNetV1
 from ..utils.download import prep_weights_file
 
 # https://github.com/deepinsight/insightface/tree/master/alignment/coordinate_reg        
@@ -10,13 +11,13 @@ from ..utils.download import prep_weights_file
 # https://github.com/nttstar/insightface-resources/blob/master/alignment/images/2d106markup.jpg
 
 
-class MobileNetCR(nn.Module):
+class MobileNetV1_Head212(nn.Module):
 
     def __init__(self):
-        super(MobileNetCR, self).__init__()
-        self.body = MobileNetV1(0.5)
+        super(MobileNetV1_Head212, self).__init__()
+        self.body = MobileNetV1(0.5, relu_type='prelu', bn_eps=1e-03)
         self.head = nn.Sequential(
-            ConvUnit(512, 64, 3, 2, 1),
+            ConvUnit(512, 64, 3, 2, 1, 'prelu', 1e-03),
             nn.Flatten(),
             nn.Linear(64*3*3, 212)
         )
@@ -31,7 +32,7 @@ class CoordRegLandmarker():
 
     def __init__(self, device):
         print('Initializing coordinate regression model for landmark detection')
-        self.model = MobileNetCR().to(device)
+        self.model = MobileNetV1_Head212().to(device)
         wf = prep_weights_file('https://drive.google.com/uc?id=1H1-KkskDrQvQ_J_bFLxZeie6YvTfB7KE', 'mbnet_2d106det_insightface.pt', gdrive=True)
         wd_src = torch.load(wf, map_location=torch.device(device))
         wd_dst = {}

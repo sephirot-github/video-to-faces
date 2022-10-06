@@ -12,7 +12,10 @@ from itertools import product as product
 import numpy as np
 from math import ceil
 
-from ..utils import prep_weights_file
+from ..backbones.basic import ConvUnit
+from ..backbones.mobilenet import MobileNetV1
+from ..utils.download import prep_weights_file
+
 
 def conv_bn_no_relu(inp, oup, stride):
     return nn.Sequential(
@@ -20,9 +23,9 @@ def conv_bn_no_relu(inp, oup, stride):
         nn.BatchNorm2d(oup),
     )
 
-def conv_bn1X1(inp, oup, stride, leaky=0):
+def conv_bn(inp, oup, stride = 1, leaky = 0):
     return nn.Sequential(
-        nn.Conv2d(inp, oup, 1, stride, padding=0, bias=False),
+        nn.Conv2d(inp, oup, 3, stride, 1, bias=False),
         nn.BatchNorm2d(oup),
         nn.LeakyReLU(negative_slope=leaky, inplace=True)
     )
@@ -50,39 +53,6 @@ class SSH(nn.Module):
         conv7X7 = self.conv7x7_3(conv7X7_2)
         out = torch.cat([conv3X3, conv5X5, conv7X7], dim=1)
         out = F.relu(out)
-        return out
-
-
-class FPN(nn.Module):
-    def __init__(self,in_channels_list,out_channels):
-        super(FPN,self).__init__()
-        leaky = 0
-        if (out_channels <= 64):
-            leaky = 0.1
-        self.output1 = conv_bn1X1(in_channels_list[0], out_channels, stride = 1, leaky = leaky)
-        self.output2 = conv_bn1X1(in_channels_list[1], out_channels, stride = 1, leaky = leaky)
-        self.output3 = conv_bn1X1(in_channels_list[2], out_channels, stride = 1, leaky = leaky)
-
-        self.merge1 = conv_bn(out_channels, out_channels, leaky = leaky)
-        self.merge2 = conv_bn(out_channels, out_channels, leaky = leaky)
-
-    def forward(self, input):
-        # names = list(input.keys())
-        input = list(input.values())
-
-        output1 = self.output1(input[0])
-        output2 = self.output2(input[1])
-        output3 = self.output3(input[2])
-
-        up3 = F.interpolate(output3, size=[output2.size(2), output2.size(3)], mode="nearest")
-        output2 = output2 + up3
-        output2 = self.merge2(output2)
-
-        up2 = F.interpolate(output2, size=[output1.size(2), output1.size(3)], mode="nearest")
-        output1 = output1 + up2
-        output1 = self.merge1(output1)
-
-        out = [output1, output2, output3]
         return out
 
 
@@ -123,87 +93,55 @@ class LandmarkHead(nn.Module):
         return out.view(out.shape[0], -1, 10)
 
 
-def conv_bn(inp, oup, stride = 1, leaky = 0):
-    return nn.Sequential(
-        nn.Conv2d(inp, oup, 3, stride, 1, bias=False),
-        nn.BatchNorm2d(oup),
-        nn.LeakyReLU(negative_slope=leaky, inplace=True)
-    )
 
-def conv_dw(inp, oup, stride, leaky=0.1):
-    return nn.Sequential(
-        nn.Conv2d(inp, inp, 3, stride, 1, groups=inp, bias=False),
-        nn.BatchNorm2d(inp),
-        nn.LeakyReLU(negative_slope= leaky,inplace=True),
 
-        nn.Conv2d(inp, oup, 1, 1, 0, bias=False),
-        nn.BatchNorm2d(oup),
-        nn.LeakyReLU(negative_slope= leaky,inplace=True),
-    )
 
-class MobileNetV1(nn.Module):
-    def __init__(self):
-        super(MobileNetV1, self).__init__()
-        self.stage1 = nn.Sequential(
-            conv_bn(3, 8, 2, leaky = 0.1),    # 3
-            conv_dw(8, 16, 1),   # 7
-            conv_dw(16, 32, 2),  # 11
-            conv_dw(32, 32, 1),  # 19
-            conv_dw(32, 64, 2),  # 27
-            conv_dw(64, 64, 1),  # 43
-        )
-        self.stage2 = nn.Sequential(
-            conv_dw(64, 128, 2),  # 43 + 16 = 59
-            conv_dw(128, 128, 1), # 59 + 32 = 91
-            conv_dw(128, 128, 1), # 91 + 32 = 123
-            conv_dw(128, 128, 1), # 123 + 32 = 155
-            conv_dw(128, 128, 1), # 155 + 32 = 187
-            conv_dw(128, 128, 1), # 187 + 32 = 219
-        )
-        self.stage3 = nn.Sequential(
-            conv_dw(128, 256, 2), # 219 +3 2 = 241
-            conv_dw(256, 256, 1), # 241 + 64 = 301
-        )
-        self.avg = nn.AdaptiveAvgPool2d((1,1))
-        self.fc = nn.Linear(256, 1000)
+class FPN(nn.Module):
+    def __init__(self, cins, cout, relu):
+        super(FPN,self).__init__()
+        self.output1 = ConvUnit(cins[0], cout, 1, 1, 0, relu)
+        self.output2 = ConvUnit(cins[1], cout, 1, 1, 0, relu)
+        self.output3 = ConvUnit(cins[2], cout, 1, 1, 0, relu)
+        self.merge1 = ConvUnit(cout, cout, 3, 1, 1, relu)
+        self.merge2 = ConvUnit(cout, cout, 3, 1, 1, relu)
 
-    def forward(self, x):
-        x = self.stage1(x)
-        x = self.stage2(x)
-        x = self.stage3(x)
-        x = self.avg(x)
-        # x = self.model(x)
-        x = x.view(-1, 256)
-        x = self.fc(x)
-        return x
+    def forward(self, input):
+        output1 = self.output1(input[0])
+        output2 = self.output2(input[1])
+        output3 = self.output3(input[2])
 
+        up3 = F.interpolate(output3, size=[output2.size(2), output2.size(3)], mode="nearest")
+        output2 = output2 + up3
+        output2 = self.merge2(output2)
+
+        up2 = F.interpolate(output2, size=[output1.size(2), output1.size(3)], mode="nearest")
+        output1 = output1 + up2
+        output1 = self.merge1(output1)
+
+        out = [output1, output2, output3]
+        return out
+
+
+# https://arxiv.org/pdf/1905.00641.pdf
 
 class RetinaFace(nn.Module):
 
     def __init__(self, bbone='mobilenet'):
-        """TBD"""
         super(RetinaFace,self).__init__()
         if bbone == 'mobilenet':
-            backbone = MobileNetV1()
-            cin, cout = 32, 64
-            self.body = _utils.IntermediateLayerGetter(backbone, {'stage1': 1, 'stage2': 2, 'stage3': 3})
+            self.body = MobileNetV1(0.25, relu_type='lrelu_0.1', return_inter=[5, 11])
+            cins, cout, relu = [64, 128, 256], 64, 'lrelu_0.1'
         else:
-            import torchvision.models as models
-            backbone = models.resnet50()
-            cin, cout = 256, 256
-            self.module.body = _utils.IntermediateLayerGetter(backbone, {'layer2': 1, 'layer3': 2, 'layer4': 3})
+            #import torchvision.models as models
+            #backbone = models.resnet50()
+            #self.module.body = _utils.IntermediateLayerGetter(backbone, {'layer2': 1, 'layer3': 2, 'layer4': 3})
+            cins, cout, relu = [512, 1024, 2048], 256, 'plain'
         
-        in_channels_stage2 = cin
-        in_channels_list = [
-            in_channels_stage2 * 2,
-            in_channels_stage2 * 4,
-            in_channels_stage2 * 8,
-        ]
         out_channels = cout
-        self.fpn = FPN(in_channels_list,out_channels)
-        self.ssh1 = SSH(out_channels, out_channels)
-        self.ssh2 = SSH(out_channels, out_channels)
-        self.ssh3 = SSH(out_channels, out_channels)
+        self.fpn = FPN(cins, cout, relu)
+        self.ssh1 = SSH(cout, cout)
+        self.ssh2 = SSH(cout, cout)
+        self.ssh3 = SSH(cout, cout)
 
         self.ClassHead = self._make_class_head(fpn_num=3, inchannels=cout)
         self.BboxHead = self._make_bbox_head(fpn_num=3, inchannels=cout)
@@ -227,10 +165,9 @@ class RetinaFace(nn.Module):
             landmarkhead.append(LandmarkHead(inchannels,anchor_num))
         return landmarkhead
 
-    def forward(self,inputs):
-        out = self.body(inputs)
-        # FPN
-        fpn = self.fpn(out)
+    def forward(self, x):
+        xs = self.body(x)
+        fpn = self.fpn(xs)
         # SSH
         feature1 = self.ssh1(fpn[0])
         feature2 = self.ssh2(fpn[1])
@@ -333,9 +270,14 @@ class RetinaFaceDetector():
         else:
             print('Initializing RetinaFace model (with ResNet50 backbone) for face detection')
             wf = prep_weights_file('https://drive.google.com/uc?id=14KX6VqF69MdSPk3Tr9PlDYbq7ArpdNUW', 'Resnet50_Final.pth', gdrive=True)
-        wd = torch.load(wf, map_location=torch.device(device))
+        
         self.model = RetinaFace(bbone).to(device)
-        self.model.load_state_dict(wd)
+        wd_src = torch.load(wf, map_location=torch.device(device))
+        wd_dst = {}
+        names = list(wd_src)
+        for i, w in enumerate(list(self.model.state_dict())):
+            wd_dst[w] = wd_src[names[i]]
+        self.model.load_state_dict(wd_dst)
         self.model.eval()
     
     def __call__(self, img):
