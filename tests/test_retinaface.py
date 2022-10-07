@@ -35,7 +35,7 @@ class TestRetinaFace(unittest.TestCase):
         self.assertAlmostEqual(r2[0][1], 31)
         self.assertAlmostEqual(r2[7][2], 307)
         self.assertAlmostEqual(r2[1][4], 0.99907, places=5)
-        self.assertAlmostEqual(r2[6][4], 0.034623783)
+        self.assertAlmostEqual(r2[6][4], 0.034624, places=6)
         
         self.assertEqual(r3.shape, (327, 5))
         np.testing.assert_almost_equal(r3[92], np.array([10., 180., 37., 216., 0.12444]), decimal=5)
