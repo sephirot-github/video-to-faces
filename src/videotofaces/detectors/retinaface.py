@@ -1,128 +1,71 @@
-# https://github.com/biubug6/Pytorch_Retinaface
-# https://github.com/barisbatuhan/FaceDetector
-
 import cv2
+import numpy as np
 import torch
 import torch.nn as nn
 import torchvision.models._utils as _utils
 import torch.nn.functional as F
+from torchvision.ops import nms
+from torchvision.ops import batched_nms
 
-import torch
 from itertools import product as product
-import numpy as np
 from math import ceil
 
 from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV1
 from ..utils.download import prep_weights_file
 
-
-def conv_bn_no_relu(inp, oup, stride):
-    return nn.Sequential(
-        nn.Conv2d(inp, oup, 3, stride, 1, bias=False),
-        nn.BatchNorm2d(oup),
-    )
-
-def conv_bn(inp, oup, stride = 1, leaky = 0):
-    return nn.Sequential(
-        nn.Conv2d(inp, oup, 3, stride, 1, bias=False),
-        nn.BatchNorm2d(oup),
-        nn.LeakyReLU(negative_slope=leaky, inplace=True)
-    )
-
-
-class SSH(nn.Module):
-
-    def __init__(self, in_channel, out_channel):
-        super(SSH, self).__init__()
-        assert out_channel % 4 == 0
-        leaky = 0
-        if (out_channel <= 64):
-            leaky = 0.1
-        self.conv3X3 = conv_bn_no_relu(in_channel, out_channel//2, stride=1)
-        self.conv5X5_1 = conv_bn(in_channel, out_channel//4, stride=1, leaky = leaky)
-        self.conv5X5_2 = conv_bn_no_relu(out_channel//4, out_channel//4, stride=1)
-        self.conv7X7_2 = conv_bn(out_channel//4, out_channel//4, stride=1, leaky = leaky)
-        self.conv7x7_3 = conv_bn_no_relu(out_channel//4, out_channel//4, stride=1)
-
-    def forward(self, input):
-        conv3X3 = self.conv3X3(input)
-        conv5X5_1 = self.conv5X5_1(input)
-        conv5X5 = self.conv5X5_2(conv5X5_1)
-        conv7X7_2 = self.conv7X7_2(conv5X5_1)
-        conv7X7 = self.conv7x7_3(conv7X7_2)
-        out = torch.cat([conv3X3, conv5X5, conv7X7], dim=1)
-        out = F.relu(out)
-        return out
-
-
-class ClassHead(nn.Module):
-
-    def __init__(self,inchannels=512,num_anchors=3):
-        super(ClassHead,self).__init__()
-        self.num_anchors = num_anchors
-        self.conv1x1 = nn.Conv2d(inchannels,self.num_anchors*2,kernel_size=(1,1),stride=1,padding=0)
-
-    def forward(self,x):
-        out = self.conv1x1(x)
-        out = out.permute(0,2,3,1).contiguous() 
-        return out.view(out.shape[0], -1, 2)
-
-
-class BboxHead(nn.Module):
-
-    def __init__(self,inchannels=512,num_anchors=3):
-        super(BboxHead,self).__init__()
-        self.conv1x1 = nn.Conv2d(inchannels,num_anchors*4,kernel_size=(1,1),stride=1,padding=0)
-
-    def forward(self,x):
-        out = self.conv1x1(x)
-        out = out.permute(0,2,3,1).contiguous()
-        return out.view(out.shape[0], -1, 4)
-
-
-class LandmarkHead(nn.Module):
-
-    def __init__(self,inchannels=512,num_anchors=3):
-        super(LandmarkHead,self).__init__()
-        self.conv1x1 = nn.Conv2d(inchannels,num_anchors*10,kernel_size=(1,1),stride=1,padding=0)
-
-    def forward(self,x):
-        out = self.conv1x1(x)
-        out = out.permute(0,2,3,1).contiguous()
-        return out.view(out.shape[0], -1, 10)
-
-
-
+# https://github.com/biubug6/Pytorch_Retinaface
+# https://github.com/barisbatuhan/FaceDetector
+# Paper: https://arxiv.org/pdf/1905.00641.pdf
 
 
 class FPN(nn.Module):
     def __init__(self, cins, cout, relu):
-        super(FPN,self).__init__()
-        self.output1 = ConvUnit(cins[0], cout, 1, 1, 0, relu)
-        self.output2 = ConvUnit(cins[1], cout, 1, 1, 0, relu)
-        self.output3 = ConvUnit(cins[2], cout, 1, 1, 0, relu)
-        self.merge1 = ConvUnit(cout, cout, 3, 1, 1, relu)
-        self.merge2 = ConvUnit(cout, cout, 3, 1, 1, relu)
+        super(FPN, self).__init__()
+        self.outputs = nn.ModuleList([ConvUnit(cin, cout, 1, 1, 0, relu) for cin in cins])
+        self.merges = nn.ModuleList([ConvUnit(cout, cout, 3, 1, 1, relu) for _ in cins[1:]])
 
-    def forward(self, input):
-        output1 = self.output1(input[0])
-        output2 = self.output2(input[1])
-        output3 = self.output3(input[2])
+    def forward(self, xs):
+        n = len(xs)
+        xs = [self.outputs[i](xs[i]) for i in range(n)]
+        for i in range(0, n - 1)[::-1]:
+            xs[i] += F.interpolate(xs[i + 1], size=xs[i].shape[2:], mode='nearest')
+            xs[i] = self.merges[i](xs[i])
+        return xs
 
-        up3 = F.interpolate(output3, size=[output2.size(2), output2.size(3)], mode="nearest")
-        output2 = output2 + up3
-        output2 = self.merge2(output2)
 
-        up2 = F.interpolate(output2, size=[output1.size(2), output1.size(3)], mode="nearest")
-        output1 = output1 + up2
-        output1 = self.merge1(output1)
+class SSH(nn.Module):
 
-        out = [output1, output2, output3]
+    def __init__(self, cin, cout, relu):
+        super(SSH, self).__init__()
+        self.conv1 = ConvUnit(cin, cout//2, 3, 1, 1, relu_type=None)
+        self.conv2 = ConvUnit(cin, cout//4, 3, 1, 1, relu_type=relu)
+        self.conv3 = ConvUnit(cout//4, cout//4, 3, 1, 1, relu_type=None)
+        self.conv4 = ConvUnit(cout//4, cout//4, 3, 1, 1, relu_type=relu)
+        self.conv5 = ConvUnit(cout//4, cout//4, 3, 1, 1, relu_type=None)
+
+    def forward(self, x):
+        y1 = self.conv1(x)
+        t = self.conv2(x)
+        y2 = self.conv3(t)
+        y3 = self.conv5(self.conv4(t))
+        out = torch.cat([y1, y2, y3], dim=1)
+        out = F.relu(out)
         return out
 
 
-# https://arxiv.org/pdf/1905.00641.pdf
+class Head(nn.Module):
+
+    def __init__(self, cin, num_anchors, task_len):
+        super(Head, self).__init__()
+        self.task_len = task_len
+        self.conv = nn.Conv2d(cin, num_anchors * task_len, kernel_size=1)
+    
+    def forward(self, x):
+        x = self.conv(x).permute(0, 2, 3, 1)
+        x = x.reshape(x.shape[0], -1, self.task_len)
+        return x
+
 
 class RetinaFace(nn.Module):
 
@@ -137,47 +80,21 @@ class RetinaFace(nn.Module):
             #self.module.body = _utils.IntermediateLayerGetter(backbone, {'layer2': 1, 'layer3': 2, 'layer4': 3})
             cins, cout, relu = [512, 1024, 2048], 256, 'plain'
         
-        out_channels = cout
-        self.fpn = FPN(cins, cout, relu)
-        self.ssh1 = SSH(cout, cout)
-        self.ssh2 = SSH(cout, cout)
-        self.ssh3 = SSH(cout, cout)
-
-        self.ClassHead = self._make_class_head(fpn_num=3, inchannels=cout)
-        self.BboxHead = self._make_bbox_head(fpn_num=3, inchannels=cout)
-        self.LandmarkHead = self._make_landmark_head(fpn_num=3, inchannels=cout)
-
-    def _make_class_head(self,fpn_num=3,inchannels=64,anchor_num=2):
-        classhead = nn.ModuleList()
-        for i in range(fpn_num):
-            classhead.append(ClassHead(inchannels,anchor_num))
-        return classhead
-    
-    def _make_bbox_head(self,fpn_num=3,inchannels=64,anchor_num=2):
-        bboxhead = nn.ModuleList()
-        for i in range(fpn_num):
-            bboxhead.append(BboxHead(inchannels,anchor_num))
-        return bboxhead
-
-    def _make_landmark_head(self,fpn_num=3,inchannels=64,anchor_num=2):
-        landmarkhead = nn.ModuleList()
-        for i in range(fpn_num):
-            landmarkhead.append(LandmarkHead(inchannels,anchor_num))
-        return landmarkhead
+        self.feature_pyramid = FPN(cins, cout, relu)
+        self.context_modules = nn.ModuleList([SSH(cout, cout, relu) for _ in cins])
+        num_anchors = 2
+        self.heads_class = nn.ModuleList([Head(cout, num_anchors, 2) for _ in cins])
+        self.heads_boxes = nn.ModuleList([Head(cout, num_anchors, 4) for _ in cins])
+        self.heads_ldmks = nn.ModuleList([Head(cout, num_anchors, 10) for _ in cins])
 
     def forward(self, x):
         xs = self.body(x)
-        fpn = self.fpn(xs)
-        # SSH
-        feature1 = self.ssh1(fpn[0])
-        feature2 = self.ssh2(fpn[1])
-        feature3 = self.ssh3(fpn[2])
-        features = [feature1, feature2, feature3]
-
-        bbox_regressions = torch.cat([self.BboxHead[i](feature) for i, feature in enumerate(features)], dim=1)
-        classifications = torch.cat([self.ClassHead[i](feature) for i, feature in enumerate(features)],dim=1)
-        ldm_regressions = torch.cat([self.LandmarkHead[i](feature) for i, feature in enumerate(features)], dim=1)
-        return (bbox_regressions, F.softmax(classifications, dim=-1), ldm_regressions)
+        xs = self.feature_pyramid(xs)
+        xs = [self.context_modules[i](xs[i]) for i in range(len(xs))]
+        box_reg = torch.cat([self.heads_boxes[i](xs[i]) for i in range(len(xs))], dim=1)
+        classif = torch.cat([self.heads_class[i](xs[i]) for i in range(len(xs))], dim=1)
+        ldm_reg = torch.cat([self.heads_ldmks[i](xs[i]) for i in range(len(xs))], dim=1)
+        return (box_reg, F.softmax(classif, dim=-1), ldm_reg)
 
 
 class PriorBox(object):
@@ -230,37 +147,6 @@ def decode(loc, priors, variances):
     return boxes
 
 
-def py_cpu_nms(dets, thresh):
-    """Pure Python NMS baseline."""
-    x1 = dets[:, 0]
-    y1 = dets[:, 1]
-    x2 = dets[:, 2]
-    y2 = dets[:, 3]
-    scores = dets[:, 4]
-
-    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
-    order = scores.argsort()[::-1]
-
-    keep = []
-    while order.size > 0:
-        i = order[0]
-        keep.append(i)
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
-
-        w = np.maximum(0.0, xx2 - xx1 + 1)
-        h = np.maximum(0.0, yy2 - yy1 + 1)
-        inter = w * h
-        ovr = inter / (areas[i] + areas[order[1:]] - inter)
-
-        inds = np.where(ovr <= thresh)[0]
-        order = order[inds + 1]
-
-    return keep
-
-
 class RetinaFaceDetector():
 
     def __init__(self, device, bbone='mobilenet'):
@@ -272,6 +158,7 @@ class RetinaFaceDetector():
             wf = prep_weights_file('https://drive.google.com/uc?id=14KX6VqF69MdSPk3Tr9PlDYbq7ArpdNUW', 'Resnet50_Final.pth', gdrive=True)
         
         self.model = RetinaFace(bbone).to(device)
+        #for w in self.model.state_dict(): print(w, '\t', self.model.state_dict()[w].shape)
         wd_src = torch.load(wf, map_location=torch.device(device))
         wd_dst = {}
         names = list(wd_src)
@@ -306,3 +193,34 @@ class RetinaFaceDetector():
         dets = dets[keep, :]
         dets[:, :4] = np.floor(dets[:, :4])
         return dets
+
+
+def py_cpu_nms(dets, thresh):
+    """Pure Python NMS baseline."""
+    x1 = dets[:, 0]
+    y1 = dets[:, 1]
+    x2 = dets[:, 2]
+    y2 = dets[:, 3]
+    scores = dets[:, 4]
+
+    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+    order = scores.argsort()[::-1]
+
+    keep = []
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+
+        w = np.maximum(0.0, xx2 - xx1 + 1)
+        h = np.maximum(0.0, yy2 - yy1 + 1)
+        inter = w * h
+        ovr = inter / (areas[i] + areas[order[1:]] - inter)
+
+        inds = np.where(ovr <= thresh)[0]
+        order = order[inds + 1]
+
+    return keep

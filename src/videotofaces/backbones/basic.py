@@ -15,7 +15,7 @@ class ConvUnit(nn.Module):
             self.relu = None
         elif relu_type == 'plain':
             self.relu = nn.ReLU(inplace=True)
-        if relu_type == 'prelu':
+        elif relu_type == 'prelu':
             self.relu = nn.PReLU(cout)
         elif relu_type.startswith('lrelu'):
             leak = float(relu_type.split('_')[1])
