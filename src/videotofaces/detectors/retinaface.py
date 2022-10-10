@@ -1,3 +1,5 @@
+import math
+
 import cv2
 import numpy as np
 import torch
@@ -7,15 +9,12 @@ import torch.nn.functional as F
 from torchvision.ops import nms
 from torchvision.ops import batched_nms
 
-from itertools import product as product
-from math import ceil
-
 from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV1
 from ..utils.download import prep_weights_file
 
-# https://github.com/biubug6/Pytorch_Retinaface
-# https://github.com/barisbatuhan/FaceDetector
+# Source 1: https://github.com/biubug6/Pytorch_Retinaface
+# Source 2: https://github.com/barisbatuhan/FaceDetector
 # Paper: https://arxiv.org/pdf/1905.00641.pdf
 
 
@@ -94,69 +93,49 @@ class RetinaFace(nn.Module):
         box_reg = torch.cat([self.heads_boxes[i](xs[i]) for i in range(len(xs))], dim=1)
         classif = torch.cat([self.heads_class[i](xs[i]) for i in range(len(xs))], dim=1)
         ldm_reg = torch.cat([self.heads_ldmks[i](xs[i]) for i in range(len(xs))], dim=1)
-        return (box_reg, F.softmax(classif, dim=-1), ldm_reg)
+        scores = F.softmax(classif, dim=-1)[:, :, 1]
+        return (box_reg, scores, ldm_reg)
 
 
-class PriorBox(object):
-    def __init__(self, image_size=None):
-        super(PriorBox, self).__init__()
-        self.min_sizes = [[16, 32], [64, 128], [256, 512]]
-        self.steps = [8, 16, 32]
-        self.image_size = image_size
-        self.feature_maps = [[ceil(self.image_size[0]/step), ceil(self.image_size[1]/step)] for step in self.steps]
-
-    def forward(self):
-        anchors = []
-        for k, f in enumerate(self.feature_maps):
-            min_sizes = self.min_sizes[k]
-            for i, j in product(range(f[0]), range(f[1])):
-                for min_size in min_sizes:
-                    s_kx = min_size #/ self.image_size[1]
-                    s_ky = min_size #/ self.image_size[0]
-                    cx = (j + 0.5) * self.steps[k] #/ self.image_size[1]
-                    cy = (i + 0.5) * self.steps[k] #/ self.image_size[0]
-                    anchors += [cx, cy, s_kx, s_ky]
-         # back to torch land
-        output = torch.Tensor(anchors).view(-1, 4)
-        output[:, 0] /= self.image_size[1]
-        output[:, 2] /= self.image_size[1]
-        output[:, 1] /= self.image_size[0]
-        output[:, 3] /= self.image_size[0]
-        return output
-
-    def forward_orig(self):
-        anchors = []
-        for k, f in enumerate(self.feature_maps):
-            min_sizes = self.min_sizes[k]
-            for i, j in product(range(f[0]), range(f[1])):
-                for min_size in min_sizes:
-                    s_kx = min_size / self.image_size[1]
-                    s_ky = min_size / self.image_size[0]
-                    cx = (j + 0.5) * self.steps[k] / self.image_size[1]
-                    cy = (i + 0.5) * self.steps[k] / self.image_size[0]
-                    anchors += [cx, cy, s_kx, s_ky]
-         # back to torch land
-        output = torch.Tensor(anchors).view(-1, 4)
-        return output
-
-
-def decode(loc, priors, variances):
-    """Decode locations from predictions using priors to undo
-    the encoding we did for offset regression at train time.
-    Args:
-        loc (tensor): location predictions for loc layers,
-            Shape: [num_priors,4]
-        priors (tensor): Prior boxes in center-offset form.
-            Shape: [num_priors,4].
-        variances: (list[float]) Variances of priorboxes
-    Return:
-        decoded bounding box predictions
+def get_priors(img_size, bases):
+    """For every (stride, anchors) pair in ``bases`` list, walk through every stride-sized
+    square patch of ``img_size`` canvas left-right, top-bottom and return anchors-sized boxes
+    drawn around each patch's center in a form of (center_x, center_y, width, height).
+    
+    Example: get_priors((90, 64), [(32, [(8, 4), (25, 15)])])
+    Output: shape = (12, 4)
+    [[16, 16, 8, 4], [16, 16, 25, 15], [48, 16, 8, 4], [48, 16, 25, 15],
+     [16, 48, 8, 4], [16, 48, 25, 15], [48, 48, 8, 4], [48, 48, 25, 15],
+     [16, 80, 8, 4], [16, 80, 25, 15], [48, 80, 8, 4], [48, 80, 25, 15]]
     """
-    boxes = torch.cat((
-        priors[:, :2] + loc[:, :2] * variances[0] * priors[:, 2:],
-        priors[:, 2:] * torch.exp(loc[:, 2:] * variances[1])), 1)
-    boxes[:, :2] -= boxes[:, 2:] / 2
-    boxes[:, 2:] += boxes[:, :2]
+    p = []
+    h, w = img_size
+    for stride, anchors in bases:
+        nx = math.ceil(w / stride)
+        ny = math.ceil(h / stride)
+        xs = torch.arange(nx) * stride + stride // 2
+        ys = torch.arange(ny) * stride + stride // 2
+        c = torch.dstack(torch.meshgrid(xs, ys, indexing='xy')).reshape(-1, 2)
+        # could replace line above by "torch.cartesian_prod(xs, ys)" but that'd be for indexing='ij'
+        c = c.repeat_interleave(len(anchors), dim=0)
+        s = torch.Tensor(anchors).repeat(nx*ny, 1)
+        p.append(torch.hstack([c, s]))
+    return torch.cat(p)
+
+
+def decode_boxes(pred, priors):
+    """Converts predicted boxes from network outputs into actual image coordinates based on some
+    fixed starting ``priors`` using Eq.1-4 from here: https://arxiv.org/pdf/1311.2524.pdf
+    (as linked by Fast R-CNN paper, which is in turn linked by RetinaFace paper).
+
+    Multipliers 0.1 and 0.2 are often referred to as "variances" in various implementations and used
+    for normalizing/numerical stability purposes when encoding boxes for training (and thus are needed
+    here too for scaling the numbers back). See https://github.com/rykov8/ssd_keras/issues/53 and
+    https://leimao.github.io/blog/Bounding-Box-Encoding-Decoding/#Representation-Encoding-With-Variance
+    """
+    xys = priors[:, 2:] * 0.1 * pred[:, :, :2] + priors[:, :2]
+    whs = priors[:, 2:] * torch.exp(0.2 * pred[:, :, 2:])
+    boxes = torch.cat([xys - whs / 2, xys + whs / 2], dim=-1)
     return boxes
 
 
@@ -179,37 +158,37 @@ class RetinaFaceDetector():
             wd_dst[w] = wd_src[names[i]]
         self.model.load_state_dict(wd_dst)
         self.model.eval()
-    
+
     def __call__(self, img):
-        img = np.float32(img)
-        h, w, _ = img.shape
-        img -= (104, 117, 123)
-        scl = torch.Tensor([w, h, w, h])
-        img = torch.from_numpy(img.transpose(2, 0, 1)).unsqueeze(0)
-        loc, conf, landms = self.model(img)
-    
-        priorbox = PriorBox(image_size=(h, w))
-        priors = priorbox.forward()
-        prior_data = priors.data
-        boxes = decode(loc.data.squeeze(0), prior_data, [0.1, 0.2])
-        boxes = boxes * scl
-        boxes = boxes.cpu().numpy()
-        scores = conf.squeeze(0).data.cpu().numpy()[:, 1]
-        inds = np.where(scores > 0.02)[0]
-        boxes = boxes[inds]
-        scores = scores[inds]
-        order = scores.argsort()[::-1]
-        boxes = boxes[order]
-        scores = scores[order]
-        dets = np.hstack((boxes, scores[:, np.newaxis])).astype(np.float32, copy=False)
-        keep = py_cpu_nms(dets, 0.4)
-        dets = dets[keep, :]
+        imgs = np.expand_dims(img, 0)
+        inp = cv2.dnn.blobFromImages(imgs, mean=(104, 117, 123), swapRB=False)
+        inp = torch.from_numpy(inp)
+        
+        pred, scores, landms = self.model(inp)
+        
+        bases = [(8, [(16, 16), (32, 32)]), (16, [(64, 64), (128, 128)]), (32, [(256, 256), (512, 512)])]
+        priors = get_priors(inp.shape[2:], bases)
+        boxes = decode_boxes(pred, priors)
+
+        boxes, scores = boxes[0], scores[0]
+        idx = scores > 0.02
+        boxes, scores = boxes[idx], scores[idx]
+
+        dets = torch.cat([boxes, scores.unsqueeze(1)], dim=-1).detach()
+        
+        keep = py_cpu_nms(dets.numpy(), 0.4)
+        #keep = nms(dets[:, :4], dets[:, 4], 0.4).numpy()
+        
+        dets = dets.numpy()
+        dets = dets[keep]
         dets[:, :4] = np.floor(dets[:, :4])
         return dets
 
 
 def py_cpu_nms(dets, thresh):
-    """Pure Python NMS baseline."""
+    """Pure Python NMS baseline.
+    https://github.com/rbgirshick/fast-rcnn/blob/master/lib/utils/nms.py
+    """
     x1 = dets[:, 0]
     y1 = dets[:, 1]
     x2 = dets[:, 2]
