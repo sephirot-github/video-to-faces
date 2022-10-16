@@ -7,12 +7,12 @@ import torch
 import torch.nn as nn
 import torchvision.models._utils as _utils
 import torch.nn.functional as F
-from torchvision.ops import nms
-from torchvision.ops import batched_nms
+import torchvision.ops
 
 from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV1
 from ..utils.download import prep_weights_file
+from ..utils import bbox
 
 # Source 1: https://github.com/biubug6/Pytorch_Retinaface
 # Source 2: https://github.com/barisbatuhan/FaceDetector
@@ -176,38 +176,17 @@ class RetinaFaceDetector():
             b, s = boxes[i], scores[i]
             idx = s > 0.02
             b, s = b[idx], s[idx]
+            
             b[:, 2:] += 1
-            #keep = nms(b, s, 0.4)
-            #keep = torch.LongTensor(py_cpu_nms(b.detach().numpy(), s.detach().numpy(), 0.4))
-            keep = nms_ex(b, s, 0.4)
+            #keep = torchvision.ops.nms(b, s, 0.4)                                                       # 0.007579169999999857
+            keep = torch.LongTensor(bbox.nms_ref_numpy(b.detach().numpy(), s.detach().numpy(), 0.4))    # 0.02419294500000002
+            #keep = bbox.nms_ref_torch(b, s, 0.4)                                                        # 0.09936115100000009
+            #keep = bbox.nms_custom_torch(b, s, torch.zeros(len(b)), 0.4)                                # 0.6822451370000002
+            #keep = bbox.nms_custom_numpy(b.detach().numpy(), s.detach().numpy(), np.zeros(len(b)), 0.4)  # 0.7339637869999998
             b[:, 2:] -= 1
+
             b, s = b[keep], s[keep]
             b = torch.floor(b)
             dets = torch.cat([b, s.unsqueeze(1)], dim=-1).detach().numpy()
             l.append(dets)
-        print(time.process_time() - start)
-        return l
-
-
-def nms_ex(boxes, scores, thresh):
-    """
-    https://github.com/rbgirshick/fast-rcnn/blob/master/lib/utils/nms.py
-    """
-    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-    areas = (x2 - x1) * (y2 - y1)
-    order = torch.argsort(scores, descending=True)
-    keep = []
-    while order.numel():
-        i = order[0].item()
-        keep.append(i)
-        xx1 = torch.maximum(x1[i], x1[order[1:]])
-        yy1 = torch.maximum(y1[i], y1[order[1:]])
-        xx2 = torch.minimum(x2[i], x2[order[1:]])
-        yy2 = torch.minimum(y2[i], y2[order[1:]])
-        w = torch.clamp(xx2 - xx1, min=0)
-        h = torch.clamp(yy2 - yy1, min=0)
-        inter = w * h
-        ious = inter / (areas[i] + areas[order[1:]] - inter)
-        inds = torch.nonzero(ious <= thresh).squeeze(-1)
-        order = order[inds + 1]
-    return keep
+        return l, time.process_time() - start

@@ -18,11 +18,12 @@ class TestRetinaFace(unittest.TestCase):
         im4 = cv2.imread(osp.join(testdir, 'images', '17_Ceremony_Ceremony_17_171.jpg'))
         im5 = cv2.imread(osp.join(testdir, 'images', '12_Group_Group_12_Group_Group_12_10.jpg'))
         im6 = cv2.imread(osp.join(testdir, 'images', '12_Group_Group_12_Group_Group_12_29.jpg'))
-        r1 = model([im1])[0]
-        r2 = model([im2])[0]
-        r3 = model([im3])[0]
-        r4 = model([im4])[0]
-        rb = model([im5, im6])
+        r1, t1 = model([im1]); r1 = r1[0]
+        r2, t2 = model([im2]); r2 = r2[0]
+        r3, t3 = model([im3]); r3 = r3[0]
+        r4, t4 = model([im4]); r4 = r4[0]
+        rb, t5 = model([im5, im6])
+        print(t1 + t2 + t3 + t4 + t5)
 
         self.assertEqual(r1.shape, (7, 5))
         self.assertAlmostEqual(r1[0][0], 86)
