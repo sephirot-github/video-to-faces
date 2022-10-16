@@ -262,7 +262,7 @@ def get_predictions(load, model, fn, updir, imdir):
         print('Getting predictions for the images using %s model' % mn)
         for k in tqdm(range(len(fn))):
             img = cv2.imread(osp.join(imdir, fn[k]))
-            pred = model(img)
+            pred = model([img])[0]
             pred = pred[pred[:, 4].argsort()[::-1]]
             preds.append(pred.astype(np.float32))
             inds.append(np.full([pred.shape[0], 1], k, np.float32))

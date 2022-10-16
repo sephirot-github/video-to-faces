@@ -1,4 +1,5 @@
 import math
+import time
 
 import cv2
 import numpy as np
@@ -159,8 +160,7 @@ class RetinaFaceDetector():
         self.model.load_state_dict(wd_dst)
         self.model.eval()
 
-    def __call__(self, img):
-        imgs = np.expand_dims(img, 0)
+    def __call__(self, imgs):
         inp = cv2.dnn.blobFromImages(imgs, mean=(104, 117, 123), swapRB=False)
         inp = torch.from_numpy(inp)
         
@@ -170,49 +170,44 @@ class RetinaFaceDetector():
         priors = get_priors(inp.shape[2:], bases)
         boxes = decode_boxes(pred, priors)
 
-        boxes, scores = boxes[0], scores[0]
-        idx = scores > 0.02
-        boxes, scores = boxes[idx], scores[idx]
+        start = time.process_time()
+        l = []
+        for i in range(len(imgs)):
+            b, s = boxes[i], scores[i]
+            idx = s > 0.02
+            b, s = b[idx], s[idx]
+            b[:, 2:] += 1
+            #keep = nms(b, s, 0.4)
+            #keep = torch.LongTensor(py_cpu_nms(b.detach().numpy(), s.detach().numpy(), 0.4))
+            keep = nms_ex(b, s, 0.4)
+            b[:, 2:] -= 1
+            b, s = b[keep], s[keep]
+            b = torch.floor(b)
+            dets = torch.cat([b, s.unsqueeze(1)], dim=-1).detach().numpy()
+            l.append(dets)
+        print(time.process_time() - start)
+        return l
 
-        dets = torch.cat([boxes, scores.unsqueeze(1)], dim=-1).detach()
-        
-        keep = py_cpu_nms(dets.numpy(), 0.4)
-        #keep = nms(dets[:, :4], dets[:, 4], 0.4).numpy()
-        
-        dets = dets.numpy()
-        dets = dets[keep]
-        dets[:, :4] = np.floor(dets[:, :4])
-        return dets
 
-
-def py_cpu_nms(dets, thresh):
-    """Pure Python NMS baseline.
+def nms_ex(boxes, scores, thresh):
+    """
     https://github.com/rbgirshick/fast-rcnn/blob/master/lib/utils/nms.py
     """
-    x1 = dets[:, 0]
-    y1 = dets[:, 1]
-    x2 = dets[:, 2]
-    y2 = dets[:, 3]
-    scores = dets[:, 4]
-
-    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
-    order = scores.argsort()[::-1]
-
+    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+    order = torch.argsort(scores, descending=True)
     keep = []
-    while order.size > 0:
-        i = order[0]
+    while order.numel():
+        i = order[0].item()
         keep.append(i)
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
-
-        w = np.maximum(0.0, xx2 - xx1 + 1)
-        h = np.maximum(0.0, yy2 - yy1 + 1)
+        xx1 = torch.maximum(x1[i], x1[order[1:]])
+        yy1 = torch.maximum(y1[i], y1[order[1:]])
+        xx2 = torch.minimum(x2[i], x2[order[1:]])
+        yy2 = torch.minimum(y2[i], y2[order[1:]])
+        w = torch.clamp(xx2 - xx1, min=0)
+        h = torch.clamp(yy2 - yy1, min=0)
         inter = w * h
-        ovr = inter / (areas[i] + areas[order[1:]] - inter)
-
-        inds = np.where(ovr <= thresh)[0]
+        ious = inter / (areas[i] + areas[order[1:]] - inter)
+        inds = torch.nonzero(ious <= thresh).squeeze(-1)
         order = order[inds + 1]
-
     return keep
