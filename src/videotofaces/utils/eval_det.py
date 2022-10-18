@@ -283,8 +283,8 @@ def norm_scores(preds):
     """Normalizes prediction scores, stretching them from [min, max] to [0, max] range,
     where "min" and "max" are calculated across the entire validation dataset.
     """
-    min_score = min([np.min(p[:, -1]) for p in preds])
-    max_score = max([np.max(p[:, -1]) for p in preds])
+    min_score = min([np.min(p[:, -1]) for p in preds if p.any()])
+    max_score = max([np.max(p[:, -1]) for p in preds if p.any()])
     for p in preds:
         p[:, -1] = (p[:, -1] - min_score) / (max_score - min_score)
     return preds

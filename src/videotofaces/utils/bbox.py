@@ -1,10 +1,11 @@
 import numpy as np
 import torch
 
-def nms(dets, thresh):
+def nms_numpy(dets, thresh):
     """
     https://github.com/rbgirshick/fast-rcnn/blob/master/lib/utils/nms.py
     but no +1
+    https://stackoverflow.com/a/51730512/8874388
     """
     x1, x2 = dets[:, 0], dets[:, 2]
     y1, y2 = dets[:, 1], dets[:, 3]
@@ -46,4 +47,15 @@ def nms_torch(boxes, scores, thresh):
         ious = inter / (areas[i] + areas[order[1:]] - inter)
         inds = torch.nonzero(ious <= thresh).squeeze(-1)
         order = order[inds + 1]
+    return keep
+
+
+def batched_nms_torch(boxes, scores, groups, iou_threshold):
+    """https://pytorch.org/vision/stable/_modules/torchvision/ops/boxes.html#batched_nms"""
+    #if boxes.numel() == 0:
+    #    return torch.empty((0,), dtype=torch.int64, device=boxes.device)
+    max_coordinate = boxes.max()
+    offsets = groups.to(boxes) * (max_coordinate + torch.tensor(1).to(boxes))
+    boxes_for_nms = boxes.clone() + offsets[:, None]
+    keep = nms_torch(boxes_for_nms, scores, iou_threshold)
     return keep

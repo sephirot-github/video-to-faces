@@ -106,24 +106,30 @@ class RetinaFace(nn.Module):
         bases = [(8, [(16, 16), (32, 32)]), (16, [(64, 64), (128, 128)]), (32, [(256, 256), (512, 512)])]
         priors = get_priors(x.shape[2:], bases).to(x.device)
         boxes = decode_boxes(box_reg, priors)
+        l = select_boxes(boxes, scores, len(imgs))
+        return l
 
-        #k = torch.arange(boxes.shape[0]).repeat_interleave(boxes.shape[1])
-        #b, s = boxes.reshape(-1, 4), scores.flatten()
-        #idx = s > 0.02
-        #k, b, s = k[idx], b[idx], s[idx]
-        #keep = bbox.nms_batch(b, s, k, 0.4)
-        #k, b, s = k[keep], b[keep], s[keep]
-        #r = torch.hstack([b, s.unsqueeze(1)])
-        #l = torch.split(r, list(torch.bincount(k)))
-        #return [a.detach().cpu().numpy() for a in l]
 
+def select_boxes(boxes, scores, n, impl='vect'):
+    assert impl in ['vect', 'loop']
+    if impl == 'vect':
+        k = torch.arange(n).repeat_interleave(boxes.shape[1])
+        b, s = boxes.reshape(-1, 4), scores.flatten()
+        idx = s > 0.02
+        k, b, s = k[idx], b[idx], s[idx]
+        keep = bbox.batched_nms_torch(b, s, k, 0.4)
+        k, b, s = k[keep], b[keep], s[keep]
+        r = torch.hstack([b, s.unsqueeze(1)])
+        l = [r[k == i] for i in range(n)]
+        return [t.detach().cpu().numpy() for t in l]
+    if impl == 'loop':
         l = []
-        for i in range(len(imgs)):
+        for i in range(n):
             b, s = boxes[i], scores[i]
             idx = s > 0.02
             b, s = b[idx], s[idx]
             r = torch.hstack([b, s.unsqueeze(1)]).detach().cpu().numpy()
-            keep = bbox.nms(r, 0.4)
+            keep = bbox.nms_torch(b, s, 0.4)
             l.append(r[keep])
         return l
 
