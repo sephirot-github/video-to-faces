@@ -8,6 +8,7 @@ import torch.nn.functional as F
 
 from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV1
+from ..backbones.resnet import ResNet50
 from ..utils.download import prep_weights_file
 from ..utils import bbox
 
@@ -72,10 +73,7 @@ class RetinaFace(nn.Module):
             self.body = MobileNetV1(0.25, relu_type='lrelu_0.1', return_inter=[5, 11])
             cins, cout, relu = [64, 128, 256], 64, 'lrelu_0.1'
         elif backbone == 'resnet':
-            # https://github.com/pytorch/vision/blob/main/torchvision/models/resnet.py
-            import torchvision.models
-            import torchvision.models._utils as _utils
-            self.body = _utils.IntermediateLayerGetter(torchvision.models.resnet50(), {'layer2': 1, 'layer3': 2, 'layer4': 3})
+            self.body = ResNet50()
             cins, cout, relu = [512, 1024, 2048], 256, 'plain'
         else:
             raise ValueError('Unknown backbone')
@@ -106,30 +104,45 @@ class RetinaFace(nn.Module):
         bases = [(8, [(16, 16), (32, 32)]), (16, [(64, 64), (128, 128)]), (32, [(256, 256), (512, 512)])]
         priors = get_priors(x.shape[2:], bases).to(x.device)
         boxes = decode_boxes(box_reg, priors)
-        l = select_boxes(boxes, scores, len(imgs))
+        l = select_boxes(boxes, scores, score_thr=0.02, iou_thr=0.4)
         return l
 
 
-def select_boxes(boxes, scores, n, impl='vect'):
+def select_boxes(boxes, scores, score_thr, iou_thr, impl='vect', nms_impl='torch'):
     assert impl in ['vect', 'loop']
+    assert nms_impl in ['torch', 'numpy']
+    n = boxes.shape[0]
+    
     if impl == 'vect':
         k = torch.arange(n).repeat_interleave(boxes.shape[1])
         b, s = boxes.reshape(-1, 4), scores.flatten()
-        idx = s > 0.02
+        idx = s > score_thr
         k, b, s = k[idx], b[idx], s[idx]
-        keep = bbox.batched_nms_torch(b, s, k, 0.4)
-        k, b, s = k[keep], b[keep], s[keep]
-        r = torch.hstack([b, s.unsqueeze(1)])
-        l = [r[k == i] for i in range(n)]
-        return [t.detach().cpu().numpy() for t in l]
+        if nms_impl == 'torch':
+            keep = bbox.batched_nms(b, s, k, iou_thr, 'torch')
+            k, b, s = k[keep], b[keep], s[keep]
+            r = torch.hstack([b, s.unsqueeze(1)])
+            l = [r[k == i] for i in range(n)]
+            return [t.detach().cpu().numpy() for t in l]
+        if nms_impl == 'numpy':
+            b, s, k = [x.detach().cpu().numpy() for x in [b, s, k]]
+            keep = bbox.batched_nms(b, s, k, iou_thr, 'numpy')
+            k, b, s = k[keep], b[keep], s[keep]
+            r = np.hstack([b, np.expand_dims(s, 1)])
+            l = [r[k == i] for i in range(n)]
+            return l
+
     if impl == 'loop':
         l = []
         for i in range(n):
             b, s = boxes[i], scores[i]
-            idx = s > 0.02
+            idx = s > score_thr
             b, s = b[idx], s[idx]
             r = torch.hstack([b, s.unsqueeze(1)]).detach().cpu().numpy()
-            keep = bbox.nms_torch(b, s, 0.4)
+            if nms_impl == 'torch':
+                keep = bbox.nms(b, s, iou_thr, 'torch')
+            else:
+                keep = bbox.nms(r[:, :4], r[:, 4], iou_thr, 'numpy')
             l.append(r[keep])
         return l
 
