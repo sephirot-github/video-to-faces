@@ -1,13 +1,10 @@
 import math
-import time
 
 import cv2
 import numpy as np
 import torch
 import torch.nn as nn
-import torchvision.models._utils as _utils
 import torch.nn.functional as F
-import torchvision.ops
 
 from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV1
@@ -69,17 +66,20 @@ class Head(nn.Module):
 
 class RetinaFace(nn.Module):
 
-    def __init__(self, bbone='mobilenet'):
+    def __init__(self, backbone='mobilenet'):
         super(RetinaFace,self).__init__()
-        if bbone == 'mobilenet':
+        if backbone == 'mobilenet':
             self.body = MobileNetV1(0.25, relu_type='lrelu_0.1', return_inter=[5, 11])
             cins, cout, relu = [64, 128, 256], 64, 'lrelu_0.1'
-        else:
-            #import torchvision.models as models
-            #backbone = models.resnet50()
-            #self.module.body = _utils.IntermediateLayerGetter(backbone, {'layer2': 1, 'layer3': 2, 'layer4': 3})
+        elif backbone == 'resnet':
+            # https://github.com/pytorch/vision/blob/main/torchvision/models/resnet.py
+            import torchvision.models
+            import torchvision.models._utils as _utils
+            self.body = _utils.IntermediateLayerGetter(torchvision.models.resnet50(), {'layer2': 1, 'layer3': 2, 'layer4': 3})
             cins, cout, relu = [512, 1024, 2048], 256, 'plain'
-        
+        else:
+            raise ValueError('Unknown backbone')
+
         self.feature_pyramid = FPN(cins, cout, relu)
         self.context_modules = nn.ModuleList([SSH(cout, cout, relu) for _ in cins])
         num_anchors = 2
@@ -87,15 +87,45 @@ class RetinaFace(nn.Module):
         self.heads_boxes = nn.ModuleList([Head(cout, num_anchors, 4) for _ in cins])
         self.heads_ldmks = nn.ModuleList([Head(cout, num_anchors, 10) for _ in cins])
 
-    def forward(self, x):
+    def forward(self, imgs):
+        x = cv2.dnn.blobFromImages(imgs, mean=(104, 117, 123), swapRB=False)
+        x = torch.from_numpy(x).to(next(self.parameters()).device)
+
         xs = self.body(x)
+
+        from collections import OrderedDict
+        if isinstance(xs, OrderedDict): xs = list(xs.values())
+        
         xs = self.feature_pyramid(xs)
         xs = [self.context_modules[i](xs[i]) for i in range(len(xs))]
         box_reg = torch.cat([self.heads_boxes[i](xs[i]) for i in range(len(xs))], dim=1)
         classif = torch.cat([self.heads_class[i](xs[i]) for i in range(len(xs))], dim=1)
         ldm_reg = torch.cat([self.heads_ldmks[i](xs[i]) for i in range(len(xs))], dim=1)
         scores = F.softmax(classif, dim=-1)[:, :, 1]
-        return (box_reg, scores, ldm_reg)
+     
+        bases = [(8, [(16, 16), (32, 32)]), (16, [(64, 64), (128, 128)]), (32, [(256, 256), (512, 512)])]
+        priors = get_priors(x.shape[2:], bases).to(x.device)
+        boxes = decode_boxes(box_reg, priors)
+
+        #k = torch.arange(boxes.shape[0]).repeat_interleave(boxes.shape[1])
+        #b, s = boxes.reshape(-1, 4), scores.flatten()
+        #idx = s > 0.02
+        #k, b, s = k[idx], b[idx], s[idx]
+        #keep = bbox.nms_batch(b, s, k, 0.4)
+        #k, b, s = k[keep], b[keep], s[keep]
+        #r = torch.hstack([b, s.unsqueeze(1)])
+        #l = torch.split(r, list(torch.bincount(k)))
+        #return [a.detach().cpu().numpy() for a in l]
+
+        l = []
+        for i in range(len(imgs)):
+            b, s = boxes[i], scores[i]
+            idx = s > 0.02
+            b, s = b[idx], s[idx]
+            r = torch.hstack([b, s.unsqueeze(1)]).detach().cpu().numpy()
+            keep = bbox.nms(r, 0.4)
+            l.append(r[keep])
+        return l
 
 
 def get_priors(img_size, bases):
@@ -142,15 +172,15 @@ def decode_boxes(pred, priors):
 
 class RetinaFaceDetector():
 
-    def __init__(self, device, bbone='mobilenet'):
-        if bbone == 'mobilenet':
+    def __init__(self, device, backbone='mobilenet'):
+        if backbone == 'mobilenet':
             print('Initializing RetinaFace model (with MobileNetV1 backbone) for face detection')
             wf = prep_weights_file('https://drive.google.com/uc?id=15zP8BP-5IvWXWZoYTNdvUJUiBqZ1hxu1', 'mobilenet0.25_Final.pth', gdrive=True)
-        else:
+        elif backbone == 'resnet':
             print('Initializing RetinaFace model (with ResNet50 backbone) for face detection')
             wf = prep_weights_file('https://drive.google.com/uc?id=14KX6VqF69MdSPk3Tr9PlDYbq7ArpdNUW', 'Resnet50_Final.pth', gdrive=True)
         
-        self.model = RetinaFace(bbone).to(device)
+        self.model = RetinaFace(backbone).to(device)
         #for w in self.model.state_dict(): print(w, '\t', self.model.state_dict()[w].shape)
         wd_src = torch.load(wf, map_location=torch.device(device))
         wd_dst = {}
@@ -161,32 +191,6 @@ class RetinaFaceDetector():
         self.model.eval()
 
     def __call__(self, imgs):
-        inp = cv2.dnn.blobFromImages(imgs, mean=(104, 117, 123), swapRB=False)
-        inp = torch.from_numpy(inp)
-        
-        pred, scores, landms = self.model(inp)
-        
-        bases = [(8, [(16, 16), (32, 32)]), (16, [(64, 64), (128, 128)]), (32, [(256, 256), (512, 512)])]
-        priors = get_priors(inp.shape[2:], bases)
-        boxes = decode_boxes(pred, priors)
-
-        start = time.process_time()
-        l = []
-        for i in range(len(imgs)):
-            b, s = boxes[i], scores[i]
-            idx = s > 0.02
-            b, s = b[idx], s[idx]
-            
-            b[:, 2:] += 1
-            #keep = torchvision.ops.nms(b, s, 0.4)                                                       # 0.007579169999999857
-            keep = torch.LongTensor(bbox.nms_ref_numpy(b.detach().numpy(), s.detach().numpy(), 0.4))    # 0.02419294500000002
-            #keep = bbox.nms_ref_torch(b, s, 0.4)                                                        # 0.09936115100000009
-            #keep = bbox.nms_custom_torch(b, s, torch.zeros(len(b)), 0.4)                                # 0.6822451370000002
-            #keep = bbox.nms_custom_numpy(b.detach().numpy(), s.detach().numpy(), np.zeros(len(b)), 0.4)  # 0.7339637869999998
-            b[:, 2:] -= 1
-
-            b, s = b[keep], s[keep]
-            b = torch.floor(b)
-            dets = torch.cat([b, s.unsqueeze(1)], dim=-1).detach().numpy()
-            l.append(dets)
-        return l, time.process_time() - start
+        with torch.no_grad():
+            res = self.model(imgs)
+        return res
