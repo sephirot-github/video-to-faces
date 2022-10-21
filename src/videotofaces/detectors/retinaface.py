@@ -73,8 +73,11 @@ class RetinaFace(nn.Module):
             self.body = MobileNetV1(0.25, relu_type='lrelu_0.1', return_inter=[5, 11])
             cins, cout, relu = [64, 128, 256], 64, 'lrelu_0.1'
         elif backbone == 'resnet':
-            self.body = ResNet50()
+            self.body = ResNet50(return_count=3)
             cins, cout, relu = [512, 1024, 2048], 256, 'plain'
+        elif backbone == 'resnet_bbt':
+            self.body = ResNet50()
+            cins, cout, relu = [256, 512, 1024, 2048], 256, 'plain'
         else:
             raise ValueError('Unknown backbone')
 
@@ -198,6 +201,9 @@ class RetinaFaceDetector():
         elif backbone == 'resnet':
             print('Initializing RetinaFace model (with ResNet50 backbone) for face detection')
             wf = prep_weights_file('https://drive.google.com/uc?id=14KX6VqF69MdSPk3Tr9PlDYbq7ArpdNUW', 'Resnet50_Final.pth', gdrive=True)
+        elif backbone == 'resnet_bbt':
+            print('---BBT---')
+            wf = prep_weights_file('https://drive.google.com/uc?id=1uraA7ZdCCmos0QSVR6CJgg0aSLtV4q4m', 'final_mixed_r50.pth', gdrive=True)
         
         self.model = RetinaFace(backbone).to(device)
         #for w in self.model.state_dict(): print(w, '\t', self.model.state_dict()[w].shape)

@@ -33,7 +33,7 @@ class Bottleneck(nn.Module):
 
 class ResNet50(nn.Module):
 
-    def __init__(self, layers=[3, 4, 6, 3]):
+    def __init__(self, return_count=4, layers=[3, 4, 6, 3]):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
@@ -43,6 +43,7 @@ class ResNet50(nn.Module):
         self.layer2 = nn.Sequential(*([Bottleneck(256, 128, 2)] + [Bottleneck(512, 128) for i in range(1, layers[1])]))
         self.layer3 = nn.Sequential(*([Bottleneck(512, 256, 2)] + [Bottleneck(1024, 256) for i in range(1, layers[2])]))
         self.layer4 = nn.Sequential(*([Bottleneck(1024, 512, 2)] + [Bottleneck(2048, 512) for i in range(1, layers[3])]))
+        self.return_count = return_count
 
     def forward(self, x):
         x = self.conv1(x)
@@ -50,8 +51,8 @@ class ResNet50(nn.Module):
         x = self.relu(x)
         x = self.maxpool(x)
 
-        x = self.layer1(x)
-        y1 = self.layer2(x)
-        y2 = self.layer3(y1)
-        y3 = self.layer4(y2)
-        return [y1, y2, y3]
+        y1 = self.layer1(x)
+        y2 = self.layer2(y1)
+        y3 = self.layer3(y2)
+        y4 = self.layer4(y3)
+        return [y1, y2, y3, y4][-self.return_count:]
