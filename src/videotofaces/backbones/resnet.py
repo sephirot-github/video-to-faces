@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 
 # https://github.com/pytorch/vision/blob/main/torchvision/models/resnet.py
-
+# return _resnet(Bottleneck, [3, 4, 6, 3], weights, progress, **kwargs)
+# return _resnet(Bottleneck, [3, 8, 36, 3], weights, progress, **kwargs)
 
 class Bottleneck(nn.Module):
 
@@ -31,9 +32,13 @@ class Bottleneck(nn.Module):
         return x
 
 
-class ResNet50(nn.Module):
+def ResNet50(return_count=4):  return ResNet([3, 4, 6, 3], return_count)
+def ResNet152(return_count=4): return ResNet([3, 8, 36, 3], return_count)
 
-    def __init__(self, return_count=4, layers=[3, 4, 6, 3]):
+
+class ResNet(nn.Module):
+
+    def __init__(self, layers, return_count=4):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)

@@ -8,8 +8,8 @@ import torch.nn.functional as F
 
 from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV1
-from ..backbones.resnet import ResNet50
-from ..utils.download import prep_weights_file
+from ..backbones.resnet import ResNet50, ResNet152
+from ..utils.download import prep_weights_gdrive
 from ..utils import bbox
 
 # Source 1: https://github.com/biubug6/Pytorch_Retinaface
@@ -71,25 +71,17 @@ class Head(nn.Module):
 
 class RetinaFace(nn.Module):
 
-    def __init__(self, backbone, bases, predict_landmarks):
+    def __init__(self, backbone, arch_params, prep_params, bases, score_thr, predict_landmarks):
         super(RetinaFace, self).__init__()
-        
-        if backbone == 'mobilenet':
-            self.body = MobileNetV1(0.25, relu_type='lrelu_0.1', return_inter=[5, 11])
-            cins, cout, relu, extra = [64, 128, 256], 64, 'lrelu_0.1', False
-        elif backbone == 'resnet':
-            self.body = ResNet50(return_count=3)
-            cins, cout, relu, extra = [512, 1024, 2048], 256, 'plain', False
-        elif backbone == 'resnet_bbt':
-            self.body = ResNet50()
-            cins, cout, relu, extra = [256, 512, 1024, 2048], 256, 'plain', True
-        else:
-            raise ValueError('Unknown backbone')
-
+        self.prep_params = prep_params
         self.bases = bases
+        self.score_thr = score_thr
+
+        cins, cout, relu, extra = arch_params
         num_anchors = len(bases[0][1])
         num_levels = len(cins) + (1 if extra else 0)
 
+        self.body = backbone
         self.feature_pyramid = FPN(cins, cout, relu, extra)
         self.context_modules = nn.ModuleList([SSH(cout, cout, relu) for _ in range(num_levels)])
         self.heads_class = nn.ModuleList([Head(cout, num_anchors, 2) for _ in range(num_levels)])
@@ -97,16 +89,17 @@ class RetinaFace(nn.Module):
         if predict_landmarks:
             self.heads_ldmks = nn.ModuleList([Head(cout, num_anchors, 10) for _ in range(num_levels)])
 
-    def forward(self, imgs):
-        #x = cv2.dnn.blobFromImages(imgs, mean=(104, 117, 123), swapRB=False)
-        #x = cv2.dnn.blobFromImages(imgs, mean=(123, 117, 104), swapRB=True, scalefactor=1/255/0.225)
+    def preprocess(self, imgs):
+        means, stds, swapRB = self.prep_params
         x = np.stack(imgs)
-        x = x[:, :, :, [2, 1, 0]].astype(np.float32) / 255.0
-        x = (x - [0.485, 0.456, 0.406]) / [0.229, 0.224, 0.225]
+        x = x if not swapRB else x[:, :, :, [2, 1, 0]]
+        x = (x - means) / stds
         x = x.transpose(0, 3, 1, 2)
         x = torch.from_numpy(x).to(next(self.parameters()).device, torch.float32)
-        print(x[0][1][5][10:20])
+        return x
 
+    def forward(self, imgs):
+        x = self.preprocess(imgs)
         xs = self.body(x)
         xs = self.feature_pyramid(xs)
         xs = [self.context_modules[i](xs[i]) for i in range(len(xs))]
@@ -114,11 +107,11 @@ class RetinaFace(nn.Module):
         classif = torch.cat([self.heads_class[i](xs[i]) for i in range(len(xs))], dim=1)
         if hasattr(self, 'heads_ldmks'):
             ldm_reg = torch.cat([self.heads_ldmks[i](xs[i]) for i in range(len(xs))], dim=1)
-        scores = F.softmax(classif, dim=-1)[:, :, 1]
      
+        scores = F.softmax(classif, dim=-1)[:, :, 1]
         priors = get_priors(x.shape[2:], self.bases).to(x.device)
         boxes = decode_boxes(box_reg, priors)
-        l = select_boxes(boxes, scores, score_thr=0.02, iou_thr=0.4)
+        l = select_boxes(boxes, scores, score_thr=self.score_thr, iou_thr=0.4)
         return l
 
 
@@ -210,29 +203,59 @@ def decode_boxes(pred, priors):
 
 class RetinaFaceDetector():
 
-    def __init__(self, device, backbone='mobilenet'):
-        if backbone == 'mobilenet':
-            print('Initializing RetinaFace model (with MobileNetV1 backbone) for face detection')
-            wf = prep_weights_file('https://drive.google.com/uc?id=15zP8BP-5IvWXWZoYTNdvUJUiBqZ1hxu1', 'mobilenet0.25_Final.pth', gdrive=True)
-            bases = [(8, [(16, 16), (32, 32)]), (16, [(64, 64), (128, 128)]), (32, [(256, 256), (512, 512)])]
-            predict_landmarks = True
-        elif backbone == 'resnet':
-            print('Initializing RetinaFace model (with ResNet50 backbone) for face detection')
-            wf = prep_weights_file('https://drive.google.com/uc?id=14KX6VqF69MdSPk3Tr9PlDYbq7ArpdNUW', 'Resnet50_Final.pth', gdrive=True)
-            bases = [(8, [16, 32]), (16, [64, 128]), (32, [256, 512])]
-            predict_landmarks = True
-        elif backbone == 'resnet_bbt':
-            print('---BBT---')
-            wf = prep_weights_file('https://drive.google.com/uc?id=1uraA7ZdCCmos0QSVR6CJgg0aSLtV4q4m', 'final_mixed_r50.pth', gdrive=True)
-            bases = [(4, [16, 20.16, 25.40]), (8, [32, 40.32, 50.80]), (16, [64, 80.63, 101.59]), (32, [128, 161.26, 203.19]), (64, [256, 322.54, 406.37])]
-            predict_landmarks = False
+    gids = {
+        'biubug6_mobilenet': '15zP8BP-5IvWXWZoYTNdvUJUiBqZ1hxu1',
+        'biubug6_resnet50': '14KX6VqF69MdSPk3Tr9PlDYbq7ArpdNUW',
+        'bbt_resnet152_mixed': '1xB5RO99bVnXLYesnilzaZL2KWz4BsJfM',
+        'bbt_resnet50_mixed': '1uraA7ZdCCmos0QSVR6CJgg0aSLtV4q4m',
+        'bbt_resnet50_wider': '1pQLydyUUEwpEf06ElR2fw8_x2-P9RImT',
+        'bbt_resnet50_icartoon': '12RsVC1QulqsSlsCleMkIYMHsAEwMyCw8'
+    }
+
+    def __init__(self, source, device=None):
+        assert source in self.gids
+        if not device:
+            device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        weights_filename = 'retinaface_%s.pth' % source
+        print('Initializing RetinaFace model (%s) for face detection' % source)
+
+        if source.startswith('biubug6_'):
+            bases = [
+                (8, [16, 32]),
+                (16, [64, 128]),
+                (32, [256, 512])
+            ]
+            score_thr, predict_landmarks = 0.02, True
+            prep_params = ((104, 117, 123), (1, 1, 1), False)
+            if source == 'biubug6_mobilenet':
+                backbone = MobileNetV1(0.25, relu_type='lrelu_0.1', return_inter=[5, 11])
+                arch_params = ([64, 128, 256], 64, 'lrelu_0.1', False)
+            elif source == 'biubug6_resnet50':
+                backbone = ResNet50(return_count=3)
+                arch_params = ([512, 1024, 2048], 256, 'plain', False)
+            wf = prep_weights_gdrive(self.gids[source], weights_filename)
+            wd_src = torch.load(wf, map_location=torch.device(device))
+
+        elif source.startswith('bbt_'):
+            bases = [
+                (4, [16, 20.16, 25.40]),
+                (8, [32, 40.32, 50.80]),
+                (16, [64, 80.63, 101.59]),
+                (32, [128, 161.26, 203.19]),
+                (64, [256, 322.54, 406.37])
+            ]
+            score_thr, predict_landmarks = 0.5, False
+            prep_params = ((123.675, 116.28, 103.53), (58.395, 57.12, 57.375), True)
+            arch_params = ([256, 512, 1024, 2048], 256, 'plain', True)
+            backbone = ResNet152() if source == 'bbt_resnet152_mixed' else ResNet50()
+            wf = prep_weights_gdrive(self.gids[source], weights_filename)
+            wd_src = torch.load(wf, map_location=torch.device(device))
+            for s in ['conv.weight', 'bn.weight', 'bn.bias', 'bn.running_mean',
+                      'bn.running_var', 'bn.num_batches_tracked']:
+                wd_src.pop('fpn.lateral_outs.3.' + s)
         
-        self.model = RetinaFace(backbone, bases, predict_landmarks).to(device)
+        self.model = RetinaFace(backbone, arch_params, prep_params, bases, score_thr, predict_landmarks).to(device)
         #for w in self.model.state_dict(): print(w, '\t', self.model.state_dict()[w].shape)
-        wd_src = torch.load(wf, map_location=torch.device(device))
-        
-        if backbone == 'resnet_bbt':
-            for s in ['conv.weight', 'bn.weight', 'bn.bias', 'bn.running_mean', 'bn.running_var', 'bn.num_batches_tracked']: wd_src.pop('fpn.lateral_outs.3.' + s)
         wd_dst = {}
         names = list(wd_src)
         for i, w in enumerate(list(self.model.state_dict())):

@@ -10,7 +10,7 @@ from videotofaces import RetinaFaceDetector
 class TestRetinaFace(unittest.TestCase):
 
     def test_mobilenet(self):
-        model = RetinaFaceDetector('cpu', 'mobilenet')
+        model = RetinaFaceDetector('biubug6_mobilenet')
         testdir = osp.dirname(osp.realpath(__file__))
         im1 = cv2.imread(osp.join(testdir, 'images', 'img_726.jpg'))
         im2 = cv2.imread(osp.join(testdir, 'images', 'img_588.jpg'))
@@ -53,7 +53,7 @@ class TestRetinaFace(unittest.TestCase):
         np.testing.assert_almost_equal(rb[1][8], np.array([298.3359, 194.7117, 355.0907, 270.89612, 0.04269]), decimal=4)
 
     def test_resnet(self):
-        model = RetinaFaceDetector('cpu', 'resnet')
+        model = RetinaFaceDetector('biubug6_resnet50')
         testdir = osp.dirname(osp.realpath(__file__))
         im1 = cv2.imread(osp.join(testdir, 'images', 'img_726.jpg'))
         #im2 = cv2.imread(osp.join(testdir, 'images', 'img_588.jpg'))

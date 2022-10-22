@@ -50,3 +50,8 @@ def prep_weights_file(url, fn, gdrive=False):
         print('To: ' + dst)
         url_download(url, dst, gdrive)
     return dst
+
+
+def prep_weights_gdrive(gid, fn):
+    url = 'https://drive.google.com/uc?id=%s' % gid
+    return prep_weights_file(url, fn, gdrive=True)
