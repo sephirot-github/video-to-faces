@@ -254,29 +254,110 @@ def get_predictions(load, model, fn, updir, imdir):
     Alternatively, if ``load`` is specified, treats it as a path to a saved array in the same format,
     loads it and converts back into a list with len = image count (while other params are ignored).
     """
-    preds = []
     if load is None:
-        inds = []
         sn = osp.basename(updir)
         mn = model.__class__.__name__
         print('Getting predictions for the images using %s model' % mn)
-        for k in tqdm(range(len(fn))):
-            img = cv2.imread(osp.join(imdir, fn[k]))
-            pred = model([img])[0]
-            pred = pred[pred[:, 4].argsort()[::-1]]
-            preds.append(pred.astype(np.float32))
-            inds.append(np.full([pred.shape[0], 1], k, np.float32))
-        fp = osp.join(updir, 'pred_%s_%s.npy' % (sn, mn))
-        print('Saving predictions for possible repeated use to: %s' % fp)
-        flat = np.hstack([np.concatenate(inds), np.concatenate(preds)])
-        np.save(fp, flat)
+        
+        #preds, inds = predict(fn, model, imdir)
+        preds, scales = predict_batched(fn, model, imdir, 32, 50)
+
+        #fp = osp.join(updir, 'pred_%s_%s.npy' % (sn, mn))
+        #print('Saving predictions for possible repeated use to: %s' % fp)
+        #flat = np.hstack([np.concatenate(inds), np.concatenate(preds)])
+        #np.save(fp, flat)
     else:
         print('Loading saved predictions from: %s' % load)
         flat = np.load(load)
         inds = flat[:, 0].astype(np.int64)
+        preds = []
         for k in range(inds.max() + 1):
             preds.append(flat[inds == k, 1:])
     return preds
+
+
+def predict(fn, model, imdir):
+    preds = []
+    inds = []
+    for k in tqdm(range(len(fn))):
+        img = cv2.imread(osp.join(imdir, fn[k]))
+        pred = model([img])[0]
+        pred = pred[pred[:, 4].argsort()[::-1]]
+        preds.append(pred.astype(np.float32))
+        inds.append(np.full([pred.shape[0], 1], k, np.float32))
+    return preds, inds
+
+
+import math
+from sklearn.cluster import KMeans
+def predict_batched(fn, model, imdir, bs, n_clusters):
+    whs = []
+    for f in fn:
+        p = osp.join(imdir, f)
+        w, h = read_jpg_imsize(p)
+        whs.append((w, h))
+    whs = np.array(whs)
+
+    kmn = KMeans(n_clusters=n_clusters, random_state=0).fit(whs)
+    whs_adj = np.rint(kmn.cluster_centers_).astype(int)[kmn.labels_]
+    whs_dif = np.abs(whs - whs_adj)
+    whs_scl = whs_adj / whs
+    #print('max: ', whs_dif.max(), whs_scl.max())
+    #print('mean: ', whs_dif.mean(), whs_scl.mean())
+    #print(np.hstack([whs, whs_adj, whs_dif, whs_scl])[:20])
+
+    sizes = np.unique(whs_adj, axis=0)
+    pred_ind = []
+    pred_ret = []
+    with tqdm(total=len(fn)) as pbar:
+        for w, h in sizes:
+            mask = (whs_adj[:, 0] == w) * (whs_adj[:, 1] == h)
+            idx = np.nonzero(mask)[0]
+            for bn in range(math.ceil(len(idx) / bs)):
+                bidx = idx[bs*bn:bs*(bn+1)]
+                bfn = [fn[i] for i in bidx]
+                imgs = [cv2.imread(osp.join(imdir, p)) for p in bfn]
+                imgs = [cv2.resize(im, (w, h)) for im in imgs]
+                pred = model(imgs)
+                #pred = pred[pred[:, 4].argsort()[::-1]].astype(np.float32)
+                pred_ind.extend(bidx)
+                pred_ret.extend(pred)
+                pbar.update(len(bidx))
+    preds = [pred_ret[i] for i in np.argsort(pred_ind)]
+    return preds, whs_scl
+
+
+import struct
+# https://jaimonmathew.wordpress.com/2011/01/29/simpleimageinfo/
+# http://blog.jaimon.co.uk/simpleimageinfo/SimpleImageInfo.java.html
+def read_jpg_imsize(path):
+    """Extracts the width and height of a .jpg image located at ``path``
+    without reading all data by analyzing jpeg binary markers.
+    
+    Sources:
+    https://github.com/scardine/image_size/blob/master/get_image_size.py
+    https://stackoverflow.com/a/63479164
+    https://stackoverflow.com/a/35443269
+    """
+    w, h = None, None
+    with open(path, 'rb') as f:
+        jpeg_start = f.read(2)
+        assert jpeg_start == b'\xFF\xD8'
+        b = f.read(1)
+        while (b and ord(b) != 0xDA):
+            while (ord(b) != 0xFF): b = f.read(1)
+            while (ord(b) == 0xFF): b = f.read(1)
+            if (ord(b) == 0x01 or ord(b) >= 0xD0 and ord(b) <= 0xD9):
+                b = f.read(1)
+            elif (ord(b) >= 0xC0 and ord(b) <= 0xC3):
+                f.read(3)
+                h, w = struct.unpack('>HH', f.read(4))
+                break
+            else:
+                seg_len = int(struct.unpack(">H", f.read(2))[0])
+                f.read(seg_len - 2)
+                b = f.read(1)
+    return w, h
 
 
 def norm_scores(preds):
