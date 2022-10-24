@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from .download import url_download
-from .image import read_jpg_imsize
+from .image import read_imsize_binary
 from .pbar import tqdm
 
 # sources:
@@ -36,7 +36,7 @@ def eval_det_wider(model, load=None, pad_mult=32, batch_size=32, iou_threshold=0
 
 def eval_det_fddb(model, load=None, pad_mult=32, batch_size=32, iou_threshold=0.5):
     updir, imdir, gtdir = prepare_dataset('FDDB')
-    fn, gt = get_fddb_data(imdir, gtdir)
+    fn, gt = get_fddb_data(gtdir)
     pred = get_predictions(load, model, fn, updir, imdir, pad_mult, batch_size)
     precision, recall, score_thrs, avg_iou = calc_pr_curve(pred, gt, iou_threshold)
     ap = calc_ap(precision, recall)
@@ -46,13 +46,25 @@ def eval_det_fddb(model, load=None, pad_mult=32, batch_size=32, iou_threshold=0.
     print("Best F1 score: %.3f (for score threshold = %.3f)" % f1)
 
 
+def eval_det_icartoon(model, load=None, pad_mult=32, batch_size=32, iou_threshold=0.5):
+    updir, imdir, gtdir = prepare_dataset('ICARTOON')
+    fn, gt = get_icartoon_data(gtdir)
+    # from here it's the same as FDDB
+    pred = get_predictions(load, model, fn, updir, imdir, pad_mult, batch_size)
+    precision, recall, score_thrs, avg_iou = calc_pr_curve(pred, gt, iou_threshold)
+    ap = calc_ap(precision, recall)
+    f1 = best_f1(precision, recall, score_thrs)
+    print("AP: %.16f" % ap)
+    print("Mean IoU: %.3f" % avg_iou)
+    print("Best F1 score: %.3f (for score threshold = %.3f)" % f1)
+
 def prepare_dataset(set_name):
     """Automatically downloads and unpacks ``set_name`` files to ``<project_root>/eval/<set_name>``,
     images to ``images`` subfolder, annotations to ``ground_truth`` subfolder
     (unless those folders already exist; then assumes it's all already been correctly downloaded).
     """
-    if set_name not in ['WIDER_FACE', 'FDDB']:
-        raise ValueError('Unknown set_name. Possible values are "WIDER_FACE" and "FDDB"')
+    if set_name not in ['WIDER_FACE', 'FDDB', 'ICARTOON']:
+        raise ValueError('Unknown set_name. Possible values are "WIDER_FACE", "FDDB", "ICARTOON"')
     cwd = os.getcwd()
     home = osp.dirname(osp.dirname(osp.realpath(__file__))) if '__file__' in globals() else os.getcwd()
     updir = osp.join(home, 'eval', set_name)
@@ -68,6 +80,8 @@ def prepare_dataset(set_name):
                 download_wider_images()
             elif set_name == 'FDDB':
                 download_fddb_images()
+            elif set_name == 'ICARTOON':
+                download_icartoon_images()
         
         gtdir = osp.join(updir, 'ground_truth')
         if osp.isdir(gtdir):
@@ -78,6 +92,8 @@ def prepare_dataset(set_name):
                 download_wider_annotations()
             elif set_name == 'FDDB':
                 download_fddb_annotations()
+            elif set_name == 'ICARTOON':
+                download_icartoon_annotations()
     finally:
         os.chdir(cwd)
     return updir, imdir, gtdir
@@ -123,6 +139,23 @@ def download_fddb_annotations():
     shutil.unpack_archive(arcn)
     os.remove(arcn)
     os.rename('FDDB-folds', 'ground_truth')
+
+
+def download_icartoon_images():
+    link = 'https://drive.google.com/uc?id=111cgWh3Z1QBviMMahAGwPKpR3IlNCrsd'
+    arcn = 'personai_icartoonface_detval.zip'
+    url_download(link, arcn, gdrive=True)
+    print('Unpacking archive...')
+    shutil.unpack_archive(arcn)
+    os.remove(arcn)
+    os.rename('personai_icartoonface_detval', 'images')
+
+
+def download_icartoon_annotations():
+    link = 'https://drive.google.com/uc?id=1qiHHCP1RvMl6kH017pAV8-QDdcMyy8PR'
+    os.mkdir('ground_truth')
+    flnm = osp.join('ground_truth', 'personai_icartoonface_detval.csv')
+    url_download(link, flnm, gdrive=True)
 
 
 def get_wider_data(gtdir):
@@ -175,7 +208,7 @@ def get_wider_data(gtdir):
     return fn, gt, st
 
 
-def get_fddb_data(imdir, gtdir):
+def get_fddb_data(gtdir):
     """Parses FDDB annotations. They are given as ellipses instead of boxes, so also converts that.
     
     Source line format: "major_axis_radius minor_axis_radius angle center_x center_y  1"
@@ -202,9 +235,25 @@ def get_fddb_data(imdir, gtdir):
             i += 2
             v = [list(map(float, s[:-3].split(' '))) for s in txt[i:i+n]]
             v = [get_ellipse_bounding_box(e[3], e[4], e[0], e[1], e[2]) for e in v]
-            fn.append(osp.join(imdir, f) + '.jpg')
+            fn.append(f + '.jpg')
             gt.append(np.array(v))
             i += n
+    return fn, gt
+
+
+def get_icartoon_data(gtdir):
+    """Parses iCartoonFace detval annotations, which are given as '<filename>,x1,y1,x2,y2,face'"""
+    fn, gt = [], []
+    with open(osp.join(gtdir, 'personai_icartoonface_detval.csv')) as f:
+        for line in f:
+            s = line.split(',')
+            name, box = s[0], [int(e) for e in s[1:5]]
+            if not fn or fn[-1] != name:
+                fn.append(name)
+                gt.append([box])
+            else:
+                gt[-1].append(box)
+    gt = [np.array(e) for e in gt]
     return fn, gt
 
 
@@ -294,13 +343,21 @@ def predict_batched(fn, model, imdir, mult, bs):
     1 1020x761 image, then the 1st group will be processed in 5 batches (32, 32, 32, 32, 12),
     the 2nd group in 1 batch (7), and the last image will still be processed separately.
 
-    To reduce the number of groups, also adds black bars to the right and bottom of every image
-    so that both its width and height become the multiples of ``mult``.
+    To reduce the number of groups, also pads every image with 0s on the right and bottom so
+    that its dimensions are the multiples of ``mult``. This shouldn't affect the evaluation
+    process, since all faces remain at the same coordinates, while the added parts are
+    effectively black bars where a detector should find nothing.
+
+    Also prints the mean of actual resulting batch sizes to help gauge whether
+    ``mult`` value led to enough group reduction or not.
     """
     whs, pads = [], []
     for f in fn:
         p = osp.join(imdir, f)
-        w, h = read_jpg_imsize(p)
+        w, h = read_imsize_binary(p)
+        #im = cv2.imread(p)
+        #assert w == im.shape[1], 'wrong in %s' % p
+        #assert h == im.shape[0], 'wrong in %s' % p
         mw = mult * math.ceil(w / mult)
         mh = mult * math.ceil(h / mult)
         whs.append((mw, mh))
@@ -309,8 +366,7 @@ def predict_batched(fn, model, imdir, mult, bs):
     pads = np.array(pads)
 
     sizes = np.unique(whs, axis=0)
-    pred_ind = []
-    pred_ret = []
+    pred_ind, pred_ret, bszs = [], [], []
     with tqdm(total=len(fn)) as pbar:
         for w, h in sizes:
             mask = (whs[:, 0] == w) * (whs[:, 1] == h)
@@ -325,6 +381,8 @@ def predict_batched(fn, model, imdir, mult, bs):
                 pred_ind.extend(bidx)
                 pred_ret.extend(pred)
                 pbar.update(len(bidx))
+                bszs.append(len(bidx))
+    print('Effective mean batch size: %.2f' % np.mean(bszs))
     preds = [pred_ret[i] for i in np.argsort(pred_ind)]
     return preds
 
