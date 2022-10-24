@@ -9,8 +9,7 @@ from videotofaces import RetinaFaceDetector
 
 class TestRetinaFace(unittest.TestCase):
 
-    def test_mobilenet(self):
-        model = RetinaFaceDetector('biubug6_mobilenet')
+    def _get_images(self):
         testdir = osp.dirname(osp.realpath(__file__))
         im1 = cv2.imread(osp.join(testdir, 'images', 'img_726.jpg'))
         im2 = cv2.imread(osp.join(testdir, 'images', 'img_588.jpg'))
@@ -18,6 +17,11 @@ class TestRetinaFace(unittest.TestCase):
         im4 = cv2.imread(osp.join(testdir, 'images', '17_Ceremony_Ceremony_17_171.jpg'))
         im5 = cv2.imread(osp.join(testdir, 'images', '12_Group_Group_12_Group_Group_12_10.jpg'))
         im6 = cv2.imread(osp.join(testdir, 'images', '12_Group_Group_12_Group_Group_12_29.jpg'))
+        return im1, im2, im3, im4, im5, im6
+
+    def test_mobilenet(self):
+        model = RetinaFaceDetector('biubug6_mobilenet')
+        im1, im2, im3, im4, im5, im6 = self._get_images()
         r1 = model([im1])[0]
         r2 = model([im2])[0]
         r3 = model([im3])[0]
@@ -52,19 +56,10 @@ class TestRetinaFace(unittest.TestCase):
         np.testing.assert_almost_equal(rb[1][4], np.array([931.3569, 213.46419, 981.17365, 282.21033, 0.98094]), decimal=4)
         np.testing.assert_almost_equal(rb[1][8], np.array([298.3359, 194.7117, 355.0907, 270.89612, 0.04269]), decimal=4)
 
-    def test_resnet(self):
+    def test_resnet50_A(self):
         model = RetinaFaceDetector('biubug6_resnet50')
-        testdir = osp.dirname(osp.realpath(__file__))
-        im1 = cv2.imread(osp.join(testdir, 'images', 'img_726.jpg'))
-        #im2 = cv2.imread(osp.join(testdir, 'images', 'img_588.jpg'))
-        #im3 = cv2.imread(osp.join(testdir, 'images', '2_Demonstration_Demonstration_Or_Protest_2_58.jpg'))
-        #im4 = cv2.imread(osp.join(testdir, 'images', '17_Ceremony_Ceremony_17_171.jpg'))
-        im5 = cv2.imread(osp.join(testdir, 'images', '12_Group_Group_12_Group_Group_12_10.jpg'))
-        im6 = cv2.imread(osp.join(testdir, 'images', '12_Group_Group_12_Group_Group_12_29.jpg'))
+        im1, _, _, _, im5, im6 = self._get_images()
         r1 = model([im1])[0]
-        #r2 = model([im2])[0]
-        #r3 = model([im3])[0]
-        #r4 = model([im4])[0]
         rb = model([im5, im6])
 
         self.assertEqual(r1.shape, (6, 5))
@@ -72,19 +67,6 @@ class TestRetinaFace(unittest.TestCase):
         np.testing.assert_almost_equal(r1[4][:4], np.array([225.37, 47.23, 245.87, 79.22]), decimal=2)
         self.assertAlmostEqual(r1[0][4], 0.9994067)
         self.assertAlmostEqual(r1[4][4], 0.9867643)
-                
-        #self.assertEqual(r2.shape, (9, 5))
-        #np.testing.assert_almost_equal(r2[1][:4], np.array([134.65, 30.26, 190.53, 107.31]), decimal=2)
-        #np.testing.assert_almost_equal(r2[-1][:4], np.array([24.32, 62.72, 34.13, 76.91]), decimal=2)
-        #self.assertAlmostEqual(r2[1][4], 0.9996773)
-        #self.assertAlmostEqual(r2[-1][4], 0.0263380)
-        
-        #self.assertEqual(r3.shape, (130, 5))
-        #np.testing.assert_almost_equal(r3[10], np.array([518.38293, 231.06493, 562.0498, 291.08487, 0.9989656]), decimal=4)
-        #np.testing.assert_almost_equal(r3[90], np.array([744.04175, 52.911484, 755.9617, 68.882805, 0.0690808]), decimal=4)
-   
-        #self.assertEqual(r4.shape, (43, 5))
-        #np.testing.assert_almost_equal(r4[20], np.array([663.446, 75.807, 707.074, 132.183, 0.99165523]), decimal=3)
         
         self.assertEqual(len(rb), 2)
         self.assertEqual(rb[0].shape, (14, 5))
