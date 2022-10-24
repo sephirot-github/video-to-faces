@@ -1,4 +1,5 @@
 from glob import glob
+import math
 import os
 import os.path as osp
 import shutil
@@ -6,8 +7,9 @@ import shutil
 import cv2
 import numpy as np
 
-from .pbar import tqdm
 from .download import url_download
+from .image import read_jpg_imsize
+from .pbar import tqdm
 
 # sources:
 # https://github.com/wondervictor/WiderFace-Evaluation
@@ -15,10 +17,10 @@ from .download import url_download
 # https://en.wikipedia.org/wiki/Precision_and_recall
 
 
-def eval_det_wider(model, load=None, iou_threshold=0.5):
+def eval_det_wider(model, load=None, pad_mult=32, batch_size=32, iou_threshold=0.5):
     updir, imdir, gtdir = prepare_dataset('WIDER_FACE')
     fn, gt, st = get_wider_data(gtdir)
-    pred = get_predictions(load, model, fn, updir, imdir)
+    pred = get_predictions(load, model, fn, updir, imdir, pad_mult, batch_size)
     pred = norm_scores(pred)
     precision, recall, score_thrs, avg_iou = calc_pr_curve_with_settings(pred, gt, st, iou_threshold)
     ap = [calc_ap(precision[i], recall[i]) for i in range(3)]
@@ -32,10 +34,10 @@ def eval_det_wider(model, load=None, iou_threshold=0.5):
         print("%s best F1 score: %.3f (for score threshold = %.3f)" % (sett[i], f1[i][0], f1[i][1]))
 
 
-def eval_det_fddb(model, load=None, iou_threshold=0.5):
+def eval_det_fddb(model, load=None, pad_mult=32, batch_size=32, iou_threshold=0.5):
     updir, imdir, gtdir = prepare_dataset('FDDB')
     fn, gt = get_fddb_data(imdir, gtdir)
-    pred = get_predictions(load, model, fn, updir, imdir)
+    pred = get_predictions(load, model, fn, updir, imdir, pad_mult, batch_size)
     precision, recall, score_thrs, avg_iou = calc_pr_curve(pred, gt, iou_threshold)
     ap = calc_ap(precision, recall)
     f1 = best_f1(precision, recall, score_thrs)
@@ -246,10 +248,10 @@ def calc_iou_matrix(a, b):
     return iou
 
 
-def get_predictions(load, model, fn, updir, imdir):
+def get_predictions(load, model, fn, updir, imdir, mult, bs):
     """Runs inference with ``model`` on ``fn`` images from ``imdir`` folder and returns predictions,
     also saving them on disk to ``updir/pred_<set_name>_<model_class_name>.npy`` as one stacked array
-    where very row is: "image_index, x1, y1, x2, y2, score" (dtype = np.float32)
+    where every row is: "image_index, x1, y1, x2, y2, score" (dtype = np.float32).
 
     Alternatively, if ``load`` is specified, treats it as a path to a saved array in the same format,
     loads it and converts back into a list with len = image count (while other params are ignored).
@@ -258,106 +260,73 @@ def get_predictions(load, model, fn, updir, imdir):
         sn = osp.basename(updir)
         mn = model.__class__.__name__
         print('Getting predictions for the images using %s model' % mn)
-        
-        #preds, inds = predict(fn, model, imdir)
-        preds, scales = predict_batched(fn, model, imdir, 32, 50)
-
-        #fp = osp.join(updir, 'pred_%s_%s.npy' % (sn, mn))
-        #print('Saving predictions for possible repeated use to: %s' % fp)
-        #flat = np.hstack([np.concatenate(inds), np.concatenate(preds)])
-        #np.save(fp, flat)
+        if bs == 1:
+            preds = predict(fn, model, imdir)
+        else:
+            preds = predict_batched(fn, model, imdir, mult, bs)
+        fp = osp.join(updir, 'pred_%s_%s.npy' % (sn, mn))
+        print('Saving predictions for possible repeated use to: %s' % fp)
+        inds = [np.array([i] * len(p))[:, None] for i, p in enumerate(preds)]
+        flat = np.hstack([np.concatenate(inds), np.concatenate(preds)])
+        np.save(fp, flat)
     else:
         print('Loading saved predictions from: %s' % load)
         flat = np.load(load)
         inds = flat[:, 0].astype(np.int64)
-        preds = []
-        for k in range(inds.max() + 1):
-            preds.append(flat[inds == k, 1:])
+        preds = np.split(flat[:, 1:], np.bincount(inds).cumsum()[:-1])
     return preds
 
 
 def predict(fn, model, imdir):
+    """Runs inference with ``model`` on every image separately."""
     preds = []
-    inds = []
     for k in tqdm(range(len(fn))):
         img = cv2.imread(osp.join(imdir, fn[k]))
         pred = model([img])[0]
-        pred = pred[pred[:, 4].argsort()[::-1]]
-        preds.append(pred.astype(np.float32))
-        inds.append(np.full([pred.shape[0], 1], k, np.float32))
-    return preds, inds
+        pred = pred[pred[:, 4].argsort()[::-1]].astype(np.float32)
+        preds.append(pred)
+    return preds
 
 
-import math
-from sklearn.cluster import KMeans
-def predict_batched(fn, model, imdir, bs, n_clusters):
-    whs = []
+def predict_batched(fn, model, imdir, mult, bs):
+    """Runs inference with ``model`` in batches of max size ``bs`` by trying to group images
+    of the same size together. E.g. if a dataset has 140 1024x768 images, 7 1024x683 images and
+    1 1020x761 image, then the 1st group will be processed in 5 batches (32, 32, 32, 32, 12),
+    the 2nd group in 1 batch (7), and the last image will still be processed separately.
+
+    To reduce the number of groups, also adds black bars to the right and bottom of every image
+    so that both its width and height become the multiples of ``mult``.
+    """
+    whs, pads = [], []
     for f in fn:
         p = osp.join(imdir, f)
         w, h = read_jpg_imsize(p)
-        whs.append((w, h))
+        mw = mult * math.ceil(w / mult)
+        mh = mult * math.ceil(h / mult)
+        whs.append((mw, mh))
+        pads.append((mw - w, mh - h))
     whs = np.array(whs)
+    pads = np.array(pads)
 
-    kmn = KMeans(n_clusters=n_clusters, random_state=0).fit(whs)
-    whs_adj = np.rint(kmn.cluster_centers_).astype(int)[kmn.labels_]
-    whs_dif = np.abs(whs - whs_adj)
-    whs_scl = whs_adj / whs
-    #print('max: ', whs_dif.max(), whs_scl.max())
-    #print('mean: ', whs_dif.mean(), whs_scl.mean())
-    #print(np.hstack([whs, whs_adj, whs_dif, whs_scl])[:20])
-
-    sizes = np.unique(whs_adj, axis=0)
+    sizes = np.unique(whs, axis=0)
     pred_ind = []
     pred_ret = []
     with tqdm(total=len(fn)) as pbar:
         for w, h in sizes:
-            mask = (whs_adj[:, 0] == w) * (whs_adj[:, 1] == h)
+            mask = (whs[:, 0] == w) * (whs[:, 1] == h)
             idx = np.nonzero(mask)[0]
             for bn in range(math.ceil(len(idx) / bs)):
                 bidx = idx[bs*bn:bs*(bn+1)]
                 bfn = [fn[i] for i in bidx]
                 imgs = [cv2.imread(osp.join(imdir, p)) for p in bfn]
-                imgs = [cv2.resize(im, (w, h)) for im in imgs]
+                imgs = [np.pad(imgs[i], ((0, pd[1]), (0, pd[0]), (0, 0))) for i, pd in enumerate(pads[bidx])]
                 pred = model(imgs)
-                #pred = pred[pred[:, 4].argsort()[::-1]].astype(np.float32)
+                pred = [p[p[:, 4].argsort()[::-1]].astype(np.float32) for p in pred]
                 pred_ind.extend(bidx)
                 pred_ret.extend(pred)
                 pbar.update(len(bidx))
     preds = [pred_ret[i] for i in np.argsort(pred_ind)]
-    return preds, whs_scl
-
-
-import struct
-# https://jaimonmathew.wordpress.com/2011/01/29/simpleimageinfo/
-# http://blog.jaimon.co.uk/simpleimageinfo/SimpleImageInfo.java.html
-def read_jpg_imsize(path):
-    """Extracts the width and height of a .jpg image located at ``path``
-    without reading all data by analyzing jpeg binary markers.
-    
-    Sources:
-    https://github.com/scardine/image_size/blob/master/get_image_size.py
-    https://stackoverflow.com/a/63479164
-    https://stackoverflow.com/a/35443269
-    """
-    w, h = None, None
-    with open(path, 'rb') as f:
-        jpeg_start = f.read(2)
-        assert jpeg_start == b'\xFF\xD8'
-        b = f.read(1)
-        while (b and ord(b) != 0xDA):
-            while (ord(b) != 0xFF): b = f.read(1)
-            while (ord(b) == 0xFF): b = f.read(1)
-            if (ord(b) == 0x01 or ord(b) >= 0xD0 and ord(b) <= 0xD9):
-                b = f.read(1)
-            elif (ord(b) >= 0xC0 and ord(b) <= 0xC3):
-                f.read(3)
-                h, w = struct.unpack('>HH', f.read(4))
-                break
-            else:
-                seg_len = int(struct.unpack(">H", f.read(2))[0])
-                f.read(seg_len - 2)
-                b = f.read(1)
-    return w, h
+    return preds
 
 
 def norm_scores(preds):
