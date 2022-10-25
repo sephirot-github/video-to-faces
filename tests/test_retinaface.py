@@ -49,6 +49,21 @@ class TestRetinaFace(unittest.TestCase):
         model = RetinaFaceDetector('bbt_resnet50_mixed')
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [3, 4]]
+        rb = model(imgs)
+        self.assertEqual(rb[0].shape, (25, 5))
+        self.assertEqual(rb[1].shape, (20, 5))
+        np.testing.assert_almost_equal(rb[0][2], np.array([46.03808, 242.75386, 102.02594, 305.60672, 0.88260]), decimal=5)
+        np.testing.assert_almost_equal(rb[1][6], np.array([938.8128, 385.0291, 1023.2553, 528.7720, 0.8216]), decimal=4)
+
+    def test_resnet152(self):
+        model = RetinaFaceDetector('bbt_resnet152_mixed')
+        testdir = osp.dirname(osp.realpath(__file__))
+        imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [3, 4]]
+        rb = model(imgs)
+        self.assertEqual(rb[0].shape, (30, 5))
+        self.assertEqual(rb[1].shape, (23, 5))
+        np.testing.assert_almost_equal(rb[0][1], np.array([784.3955, 445.4317, 851.0759, 523.5582, 0.9040]), decimal=4)
+        np.testing.assert_almost_equal(rb[1][4], np.array([396.81052, 308.52844, 479.42703, 406.57416, 0.83383]), decimal=5)
 
 
 if __name__ == '__main__':

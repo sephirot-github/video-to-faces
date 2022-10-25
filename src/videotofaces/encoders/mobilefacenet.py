@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..detectors.coord_reg import CoordRegLandmarker
-from ..detectors import MTCNNLandmarker
+from ..detectors.mtcnn import MTCNNLandmarker
 from ..utils import face_align
 from ..utils import prep_weights_file
 

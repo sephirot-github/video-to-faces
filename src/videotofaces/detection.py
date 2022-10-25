@@ -13,7 +13,7 @@ except ImportError:
 from .utils import tqdm, resize_keep_ratio
 from .dupes import ahash, remove_dupes_nearest, remove_dupes_overall
 from .detectors.yolo3 import YOLOv3Detector, YOLOv3DetectorAnime
-from .detectors import MTCNNDetector
+from .detectors.mtcnn import MTCNNDetector
 
 
 def get_detector_model(style, det_model, device):
