@@ -34,9 +34,14 @@ def eval_det_wider(model, load=None, pad_mult=32, batch_size=32, iou_threshold=0
         print("%s best F1 score: %.3f (for score threshold = %.3f)" % (sett[i], f1[i][0], f1[i][1]))
 
 
-def eval_det_fddb(model, load=None, pad_mult=32, batch_size=32, iou_threshold=0.5):
-    updir, imdir, gtdir = prepare_dataset('FDDB')
-    fn, gt = get_fddb_data(gtdir)
+def eval_det_common(dsetname, model, load=None, pad_mult=32, batch_size=32, iou_threshold=0.5):
+    updir, imdir, gtdir = prepare_dataset(dsetname)
+    if dsetname == 'FDDB':
+        fn, gt = get_fddb_data(gtdir)
+    elif dsetname == 'ICARTOON':
+        fn, gt = get_icartoon_data(gtdir)
+    elif dsetname == 'PIXIV2018':
+        fn, gt = get_pixiv2018_data_ORIG(gtdir)
     pred = get_predictions(load, model, fn, updir, imdir, pad_mult, batch_size)
     precision, recall, score_thrs, avg_iou = calc_pr_curve(pred, gt, iou_threshold)
     ap = calc_ap(precision, recall)
@@ -45,26 +50,15 @@ def eval_det_fddb(model, load=None, pad_mult=32, batch_size=32, iou_threshold=0.
     print("Mean IoU: %.3f" % avg_iou)
     print("Best F1 score: %.3f (for score threshold = %.3f)" % f1)
 
-
-def eval_det_icartoon(model, load=None, pad_mult=32, batch_size=32, iou_threshold=0.5):
-    updir, imdir, gtdir = prepare_dataset('ICARTOON')
-    fn, gt = get_icartoon_data(gtdir)
-    # from here it's the same as FDDB
-    pred = get_predictions(load, model, fn, updir, imdir, pad_mult, batch_size)
-    precision, recall, score_thrs, avg_iou = calc_pr_curve(pred, gt, iou_threshold)
-    ap = calc_ap(precision, recall)
-    f1 = best_f1(precision, recall, score_thrs)
-    print("AP: %.16f" % ap)
-    print("Mean IoU: %.3f" % avg_iou)
-    print("Best F1 score: %.3f (for score threshold = %.3f)" % f1)
 
 def prepare_dataset(set_name):
     """Automatically downloads and unpacks ``set_name`` files to ``<project_root>/eval/<set_name>``,
     images to ``images`` subfolder, annotations to ``ground_truth`` subfolder
     (unless those folders already exist; then assumes it's all already been correctly downloaded).
     """
-    if set_name not in ['WIDER_FACE', 'FDDB', 'ICARTOON']:
-        raise ValueError('Unknown set_name. Possible values are "WIDER_FACE", "FDDB", "ICARTOON"')
+    sets = ['WIDER_FACE', 'FDDB', 'ICARTOON', 'PIXIV2018']
+    if set_name not in sets:
+        raise ValueError('Unknown set_name. Possible values are %s' % ', '.join(['"%s"' % s for s in sets]))
     cwd = os.getcwd()
     home = osp.dirname(osp.dirname(osp.realpath(__file__))) if '__file__' in globals() else os.getcwd()
     updir = osp.join(home, 'eval', set_name)
@@ -82,6 +76,8 @@ def prepare_dataset(set_name):
                 download_fddb_images()
             elif set_name == 'ICARTOON':
                 download_icartoon_images()
+            elif set_name == 'PIXIV2018':
+                download_pixiv2018_ORIG()
         
         gtdir = osp.join(updir, 'ground_truth')
         if osp.isdir(gtdir):
@@ -157,6 +153,43 @@ def download_icartoon_annotations():
     flnm = osp.join('ground_truth', 'personai_icartoonface_detval.csv')
     url_download(link, flnm, gdrive=True)
 
+
+def download_pixiv2018_ORIG():
+    """https://github.com/qhgz2013/anime-face-detector
+    3.09 GB, 6641 images (0-5999 - test, 6000-6640 - val)
+    """
+    #pip install py7zr
+    from py7zr import unpack_7zarchive
+    link = 'https://drive.google.com/uc?id=1nDPimhiwbAWc2diok-6davhubNVe82pr'
+    arcn = 'VOC2007-anime-face-detector-dataset.7z'
+    url_download(link, arcn, gdrive=True)
+    print('Unpacking archive...')
+    shutil.register_unpack_format('7zip', ['.7z'], unpack_7zarchive)
+    shutil.unpack_archive(arcn)
+    os.rename(osp.join('VOCdevkit2007', 'VOC2007', 'JPEGImages'), 'images')
+    os.rename(osp.join('VOCdevkit2007', 'VOC2007', 'Annotations'), 'ground_truth')
+    shutil.rmtree('VOCdevkit2007')
+    os.remove(arcn)
+
+
+def get_pixiv2018_data_ORIG(gtdir):
+    import xml.etree.ElementTree as ET
+    fn = ['%06d.jpg' % k for k in range(6000, 6641)]
+    gt = []
+    for k in range(6000, 6641):
+        tree = ET.parse(osp.join(gtdir, '%06d.xml' % k))
+        root = tree.getroot()
+        gtk = []
+        for face in root.findall('object'):
+            x1 = int(face.find('bndbox/xmin').text)
+            y1 = int(face.find('bndbox/ymin').text)
+            x2 = int(face.find('bndbox/xmax').text)
+            y2 = int(face.find('bndbox/ymax').text)
+            gtk.append([x1, y1, x2, y2])
+        gt.append(gtk)
+    gt = [np.array(e) for e in gt]
+    return fn, gt
+    
 
 def get_wider_data(gtdir):
     """Parses WIDER Face annotations. They are in Matlab's .mat files, so depends on scipy to read that.
@@ -365,8 +398,10 @@ def predict_batched(fn, model, imdir, mult, bs):
     whs = np.array(whs)
     pads = np.array(pads)
 
-    sizes = np.unique(whs, axis=0)
-    pred_ind, pred_ret, bszs = [], [], []
+    sizes, counts = np.unique(whs, axis=0, return_counts=True)
+    #print(sizes.shape)
+    #print(np.hstack([sizes, counts[:, None]]))
+    pred_ind, pred_ret, pred_bsr = [], [], []
     with tqdm(total=len(fn)) as pbar:
         for w, h in sizes:
             mask = (whs[:, 0] == w) * (whs[:, 1] == h)
@@ -381,8 +416,12 @@ def predict_batched(fn, model, imdir, mult, bs):
                 pred_ind.extend(bidx)
                 pred_ret.extend(pred)
                 pbar.update(len(bidx))
-                bszs.append(len(bidx))
-    print('Effective mean batch size: %.2f' % np.mean(bszs))
+                pred_bsr.append(len(bidx))
+    pred_bsr = np.array(pred_bsr)
+    unfull = np.count_nonzero(pred_bsr < bs)
+    percent = round(unfull / len(pred_bsr) * 100)
+    mean = np.mean(pred_bsr[pred_bsr < bs])
+    print('Incomplete batches: %u/%u (%u%%) (mean size = %.2f)' % (unfull, len(pred_bsr), percent, mean))
     preds = [pred_ret[i] for i in np.argsort(pred_ind)]
     return preds
 
