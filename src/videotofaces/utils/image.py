@@ -1,14 +1,39 @@
 import struct
 
 import cv2
+import numpy as np
 
 
-def resize_keep_ratio(img, resize_to):
-    """TBD"""
+def resize_keep_ratio(img, resize_to, upscale=True):
+    """Resizes an image to fit into (resize_to, resize_to) square while keeping the aspect ratio.
+    Bigger images will always be resized; smaller images will be resized only if ``upscale``=True.
+    """
     h, w = img.shape[:2]
     scale = resize_to / max(h, w)
-    if scale < 1: # smaller images stay that way, no upscaling
+    if scale != 1 and (upscale or scale < 1):
         img = cv2.resize(img, (int(w * scale), int(h * scale)))
+    return img, scale
+
+
+def pad_to_square(img, align='left'):
+    """"""
+    assert align in ['left', 'right', 'center']
+    h, w = img.shape[:2]
+    p = abs(h - w)
+    if p == 0:
+        return img
+
+    if align == 'left':
+        t = (0, p)
+    elif align == 'right':
+        t = (p, 0)
+    else:
+        t = (p // 2, p - p // 2)
+    
+    if w > h:
+        img = np.pad(img, (t, (0, 0), (0, 0)))
+    else:
+        img = np.pad(img, ((0, 0), t, (0, 0)))
     return img
 
 
