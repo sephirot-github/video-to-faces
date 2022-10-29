@@ -25,6 +25,7 @@ def get_predictions(load, model, fn, updir, imdir, mult, bs):
         else:
             preds = predict_batch(fn, model, imdir, bs)
             #preds = predict_batch_soft(fn, model, imdir, mult, bs)
+        #for p in preds: print(p.shape); print(p)
         fp = osp.join(updir, 'pred_%s_%s.npy' % (sn, mn))
         print('Saving predictions for possible repeated use to: %s' % fp)
         inds = [np.array([i] * len(p))[:, None] for i, p in enumerate(preds)]
@@ -50,17 +51,20 @@ def predict(fn, model, imdir):
 
 
 def predict_batch(fn, model, imdir, bs):
-    preds = []
+    res = []
     with tqdm(total=len(fn)) as pbar:
         for bn in range(math.ceil(len(fn) / bs)):
-            imgs = [cv2.imread(osp.join(imdir, p)) for p in fn[bs*bn:bs*(bn+1)]]
-            imgs, scls = map(list, zip(*[resize_keep_ratio(im, 608) for im in imgs]))
-            imgs = [pad_to_square(im) for im in imgs]
-            pred = model(imgs)
-            pred = [pred[i] / scls[i] for i in range(len(pred))]
-            preds.append(pred)
-            pbar.update(len(pred))
-    return preds
+            bfn = fn[bs*bn:bs*(bn+1)]
+            imgs = [cv2.imread(osp.join(imdir, p)) for p in bfn]
+            tups = [resize_keep_ratio(im, 1024) for im in imgs]
+            imgs = [pad_to_square(im) for im, _ in tups]
+            scls = [scl for _, scl in tups]
+            preds = model(imgs)
+            preds = [preds[i] / scls[i] for i in range(len(preds))]
+            preds = [p[p[:, 4].argsort()[::-1]].astype(np.float32) for p in preds]
+            res.extend(preds)
+            pbar.update(len(preds))
+    return res
 
 
 def predict_batch_soft(fn, model, imdir, mult, bs):

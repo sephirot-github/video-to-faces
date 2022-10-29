@@ -9,7 +9,7 @@ def eval_det(set_name, model, load=None, pad_mult=32, batch_size=32, iou_thresho
     updir, imdir, gtdir = prepare_dataset(set_name)
     fn, gt = get_set_data(set_name, gtdir)
     pred = get_predictions(load, model, fn, updir, imdir, pad_mult, batch_size)
-    precision, recall, score_thrs, avg_iou = calc_pr_curve(pred, gt, iou_threshold)
+    precision, recall, score_thrs, avg_iou = calc_pr_curve(pred, gt, iou_threshold, num_score_thr=100)
     ap = calc_ap(precision, recall)
     f1 = best_f1(precision, recall, score_thrs)
     print("AP: %.16f" % ap)

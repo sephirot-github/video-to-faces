@@ -44,6 +44,13 @@ def norm_scores(preds):
     return preds
 
 
+def divide_no_nan(a, b):
+    """Divides two numpy arrays as usual except that, at positions where
+    the 2nd array's elements are 0, the result is 0 instead of NaN.
+    """
+    return np.divide(a, b, out=np.zeros(a.shape, dtype=float), where=b!=0)
+
+
 def calc_pr_curve(pred, gt, iou_thr=0.5, num_score_thr=1000):
     """Calculates a group of precision/recall values for every image by cutting of ``pred``
     at ``num_score_thr`` different score thresholds and then checking how many of the
@@ -74,8 +81,9 @@ def calc_pr_curve(pred, gt, iou_thr=0.5, num_score_thr=1000):
         det_total += pred_n_per_t
         det_ious.extend(list(mx[found_flags == 1]))
 
-    precision = det_needed / det_total
-    recall = det_needed / total_needed
+    precision = divide_no_nan(det_needed, det_total)
+    recall = divide_no_nan(det_needed, total_needed)
+
     return precision, recall, score_thresholds, np.mean(det_ious)
 
 
@@ -118,8 +126,8 @@ def calc_pr_curve_with_settings(pred, gt, st, iou_thr=0.5, num_score_thr=1000):
             det_needed[s] += found_cumsum[pred_n_per_t]
             det_total[s] += pred_n_per_t - ignor_cumsum[pred_n_per_t]
 
-    precision = det_needed / det_total
-    recall = det_needed / total_needed
+    precision = divide_no_nan(det_needed, det_total)
+    recall = divide_no_nan(det_needed, total_needed)
     avg_iou = [np.mean(det_ious[i]) for i in range(num_st)]
     return precision, recall, score_thresholds, avg_iou
 
@@ -151,5 +159,5 @@ def best_f1(precision, recall, score_thrs):
     """Returns best F1 score from a range of precisions/recalls,
     along with the score threshold where it occured.
     """
-    F1 = 2 * (precision * recall) / (precision + recall)
+    F1 = divide_no_nan(2 * precision * recall, precision + recall)
     return (np.max(F1), score_thrs[np.argmax(F1)])
