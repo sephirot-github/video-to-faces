@@ -4,7 +4,7 @@ import os.path as osp
 import cv2
 import numpy as np
 
-from ...utils.image import resize_keep_ratio, pad_to_square, read_imsize_binary
+from ...utils.image import resize_keep_ratio, pad_to_area, read_imsize_binary
 from ...utils.pbar import tqdm
 
 
@@ -24,8 +24,6 @@ def get_predictions(load, model, fn, updir, imdir, mult, bs):
             preds = predict(fn, model, imdir)
         else:
             preds = predict_batch(fn, model, imdir, bs)
-            #preds = predict_batch_soft(fn, model, imdir, mult, bs)
-        #for p in preds: print(p.shape); print(p)
         fp = osp.join(updir, 'pred_%s_%s.npy' % (sn, mn))
         print('Saving predictions for possible repeated use to: %s' % fp)
         inds = [np.array([i] * len(p))[:, None] for i, p in enumerate(preds)]
@@ -45,79 +43,47 @@ def predict(fn, model, imdir):
     for k in tqdm(range(len(fn))):
         img = cv2.imread(osp.join(imdir, fn[k]))
         pred = model([img])[0]
-        pred = pred[pred[:, 4].argsort()[::-1]].astype(np.float32)
+        #pred = pred[pred[:, 4].argsort()[::-1]].astype(np.float32)
         preds.append(pred)
     return preds
 
 
 def predict_batch(fn, model, imdir, bs):
-    res = []
-    with tqdm(total=len(fn)) as pbar:
-        for bn in range(math.ceil(len(fn) / bs)):
-            bfn = fn[bs*bn:bs*(bn+1)]
-            imgs = [cv2.imread(osp.join(imdir, p)) for p in bfn]
-            tups = [resize_keep_ratio(im, 1024) for im in imgs]
-            imgs = [pad_to_square(im) for im, _ in tups]
-            scls = [scl for _, scl in tups]
-            preds = model(imgs)
-            preds = [preds[i] / scls[i] for i in range(len(preds))]
-            preds = [p[p[:, 4].argsort()[::-1]].astype(np.float32) for p in preds]
-            res.extend(preds)
-            pbar.update(len(preds))
-    return res
+    """Runs inference with ``model`` in batches of size ``bs``. For that to work on a dataset
+    where images can have all kinds of sizes and aspect ratios, sorts the images by ratio and area,
+    then takes a size of a median image within each batch, then resizes to that (while keeping the
+    ratio and padding the remainders with black bars). This aims to minimize the distortion
+    compared to, say, just squashing all images to a single fixed size.
 
-
-def predict_batch_soft(fn, model, imdir, mult, bs):
-    """Runs inference with ``model`` in batches of max size ``bs`` by trying to group images
-    of the same size together. E.g. if a dataset has 140 1024x768 images, 7 1024x683 images and
-    1 1020x761 image, then the 1st group will be processed in 5 batches (32, 32, 32, 32, 12),
-    the 2nd group in 1 batch (7), and the last image will still be processed separately.
-
-    To reduce the number of groups, also pads every image with 0s on the right and bottom so
-    that its dimensions are the multiples of ``mult``. This shouldn't affect the evaluation
-    process, since all faces remain at the same coordinates, while the added parts are
-    effectively black bars where a detector should find nothing.
-
-    Also prints the mean of actual resulting batch sizes to help gauge whether
-    ``mult`` value led to enough group reduction or not.
+    The scales for each image are remembered and used to scale the predictions back to the original
+    size, and the padding is always applied to the right and bottom so that it doesn't affect boxes'
+    coordinates.
     """
-    whs, pads = [], []
+    areas, ratios = [], []
     for f in fn:
         p = osp.join(imdir, f)
         w, h = read_imsize_binary(p)
         #im = cv2.imread(p)
         #assert w == im.shape[1], 'wrong in %s' % p
         #assert h == im.shape[0], 'wrong in %s' % p
-        mw = mult * math.ceil(w / mult)
-        mh = mult * math.ceil(h / mult)
-        whs.append((mw, mh))
-        pads.append((mw - w, mh - h))
-    whs = np.array(whs)
-    pads = np.array(pads)
-
-    sizes, counts = np.unique(whs, axis=0, return_counts=True)
-    #print(sizes.shape)
-    #print(np.hstack([sizes, counts[:, None]]))
-    pred_ind, pred_ret, pred_bsr = [], [], []
+        areas.append(w * h)
+        ratios.append(round(w / h, 1))
+    idx = np.lexsort((areas, ratios))
+    
+    res = []
     with tqdm(total=len(fn)) as pbar:
-        for w, h in sizes:
-            mask = (whs[:, 0] == w) * (whs[:, 1] == h)
-            idx = np.nonzero(mask)[0]
-            for bn in range(math.ceil(len(idx) / bs)):
-                bidx = idx[bs*bn:bs*(bn+1)]
-                bfn = [fn[i] for i in bidx]
-                imgs = [cv2.imread(osp.join(imdir, p)) for p in bfn]
-                imgs = [np.pad(imgs[i], ((0, pd[1]), (0, pd[0]), (0, 0))) for i, pd in enumerate(pads[bidx])]
-                pred = model(imgs)
-                pred = [p[p[:, 4].argsort()[::-1]].astype(np.float32) for p in pred]
-                pred_ind.extend(bidx)
-                pred_ret.extend(pred)
-                pbar.update(len(bidx))
-                pred_bsr.append(len(bidx))
-    pred_bsr = np.array(pred_bsr)
-    unfull = np.count_nonzero(pred_bsr < bs)
-    percent = round(unfull / len(pred_bsr) * 100)
-    mean = np.mean(pred_bsr[pred_bsr < bs])
-    print('Incomplete batches: %u/%u (%u%%) (mean size = %.2f)' % (unfull, len(pred_bsr), percent, mean))
-    preds = [pred_ret[i] for i in np.argsort(pred_ind)]
-    return preds
+        for bn in range(math.ceil(len(fn) / bs)):
+            bidx = idx[bs*bn:bs*(bn+1)]
+            bfn = [fn[i] for i in bidx]
+            imgs = [cv2.imread(osp.join(imdir, p)) for p in bfn]
+            h, w = imgs[len(bidx) // 2].shape[:2]
+            tups = [resize_keep_ratio(im, (w, h)) for im in imgs]
+            imgs = [pad_to_area(im, (w, h)) for im, _ in tups]
+            scls = [scl for _, scl in tups]
+            preds = model(imgs)
+            for i in range(len(preds)):
+                preds[i][:, :4] /= scls[i]
+            res.extend(preds)
+            pbar.update(len(preds))
+    res = [res[i] for i in np.argsort(idx)]
+    return res

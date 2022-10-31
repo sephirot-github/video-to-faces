@@ -14,11 +14,18 @@ def get_set_data(set_name, gtdir):
     return fn, gt
 
 
+def get_pixiv2018_data(gtdir):
+    fn, gt = [], []
+    with open(osp.join(gtdir, 'boxes.txt')) as f:
+        l = f.readline()
+        f.readline().rstrip()
+
+
 def get_pixiv2018_data_ORIG(gtdir):
     import xml.etree.ElementTree as ET
-    fn = ['%06d.jpg' % k for k in range(6000, 6641)]
+    fn = ['%06d.jpg' % k for k in range(0, 6641)]
     gt = []
-    for k in range(6000, 6641):
+    for k in range(0, 6641):
         tree = ET.parse(osp.join(gtdir, '%06d.xml' % k))
         root = tree.getroot()
         gtk = []
@@ -31,7 +38,7 @@ def get_pixiv2018_data_ORIG(gtdir):
         gt.append(gtk)
     gt = [np.array(e) for e in gt]
     return fn, gt
-    
+ 
 
 def get_icartoon_data(gtdir):
     """Parses iCartoonFace detval annotations, which are given as '<filename>,x1,y1,x2,y2,face'"""

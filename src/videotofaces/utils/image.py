@@ -4,40 +4,37 @@ import cv2
 import numpy as np
 
 
-def resize_keep_ratio(img, resize_to, upscale=True):
-    """Resizes an image to fit into (resize_to, resize_to) square while keeping the aspect ratio.
-    Bigger images will always be resized; smaller images will be resized only if ``upscale``=True.
+def resize_keep_ratio(img, to_area, upscale=True):
+    """Resizes an image to fit into the specified area while keeping the aspect ratio.
+    If ``to_area`` is not tuple, the area is inferred to be square (to_area, to_area).
+    If ``upscale`` is False, only bigger images are resized, while smaller ones return unaltered.
     """
     h, w = img.shape[:2]
-    scale = resize_to / max(h, w)
+    aw, ah = to_area if isinstance(to_area, tuple) else (to_area, to_area)
+    scale = min(aw / w, ah / h)
     if scale != 1 and (upscale or scale < 1):
         img = cv2.resize(img, (int(w * scale), int(h * scale)))
     return img, scale
 
 
-def pad_to_square(img, align='left'):
+def pad_to_area(img, area, halign='left', valign='top'):
     """"""
-    assert align in ['left', 'right', 'center']
+    assert halign in ['left', 'right', 'center']
+    assert valign in ['top', 'middle', 'bottom']
     h, w = img.shape[:2]
-    p = abs(h - w)
-    if p == 0:
-        return img
-
-    if align == 'left':
-        t = (0, p)
-    elif align == 'right':
-        t = (p, 0)
-    else:
-        t = (p // 2, p - p // 2)
-    
-    if w > h:
-        img = np.pad(img, (t, (0, 0), (0, 0)))
-    else:
-        img = np.pad(img, ((0, 0), t, (0, 0)))
+    aw, ah = area if isinstance(area, tuple) else (area, area)
+    assert aw >= w, 'area smaller than image at x'
+    assert ah >= h, 'area smaller than image at y'
+    px = max(0, aw - w)
+    py = max(0, ah - h)
+    px = (0, px) if halign == 'left' else ((px, 0) if halign == 'right' else (px // 2, px - px //2))
+    py = (0, py) if valign == 'top' else ((py, 0) if valign == 'bottom' else (py // 2, py - py //2))
+    img = np.pad(img, (py, px, (0, 0)))
     return img
 
 
 def crop_to_area(img, area):
+    """"""
     h, w = img.shape[:2]
     px1, py1, px2, py2 = area
     x1, x2 = int(px1 * w), int(px2 * w + 1)
