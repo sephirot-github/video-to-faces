@@ -3,6 +3,8 @@ import os.path as osp
 
 import numpy as np
 
+from . import extra
+
 
 def get_set_data(set_name, gtdir):
     if set_name == 'FDDB':
@@ -10,35 +12,31 @@ def get_set_data(set_name, gtdir):
     elif set_name == 'ICARTOON':
         fn, gt = get_icartoon_data(gtdir)
     elif set_name == 'PIXIV2018':
-        fn, gt = get_pixiv2018_data_ORIG(gtdir)
+        fn, gt = get_pixiv2018_data(gtdir)
+    elif set_name == 'PIXIV2018_ORIG':
+        fn, gt = extra.get_pixiv2018_data_ORIG(gtdir)
     return fn, gt
 
 
 def get_pixiv2018_data(gtdir):
+    """Parses annotations given in a single "boxes.txt" file in the form of:
+    <filename.jpg>, <number of boxes>, <n lines with x1, y1, x2, y2>, repeat.
+    """
     fn, gt = [], []
     with open(osp.join(gtdir, 'boxes.txt')) as f:
-        l = f.readline()
-        f.readline().rstrip()
-
-
-def get_pixiv2018_data_ORIG(gtdir):
-    import xml.etree.ElementTree as ET
-    fn = ['%06d.jpg' % k for k in range(0, 6641)]
-    gt = []
-    for k in range(0, 6641):
-        tree = ET.parse(osp.join(gtdir, '%06d.xml' % k))
-        root = tree.getroot()
-        gtk = []
-        for face in root.findall('object'):
-            x1 = int(face.find('bndbox/xmin').text)
-            y1 = int(face.find('bndbox/ymin').text)
-            x2 = int(face.find('bndbox/xmax').text)
-            y2 = int(face.find('bndbox/ymax').text)
-            gtk.append([x1, y1, x2, y2])
-        gt.append(gtk)
+        fni = f.readline()
+        while fni:
+            gti = []
+            c = int(f.readline().rstrip())
+            for _ in range(c):
+                box = [int(c) for c in f.readline().rstrip()]
+                gti.append(box)
+            gt.append(gti)
+            fn.append(fni)
+            fni = f.readline()
     gt = [np.array(e) for e in gt]
     return fn, gt
- 
+
 
 def get_icartoon_data(gtdir):
     """Parses iCartoonFace detval annotations, which are given as '<filename>,x1,y1,x2,y2,face'"""

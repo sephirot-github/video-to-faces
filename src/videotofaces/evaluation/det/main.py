@@ -35,7 +35,7 @@ def eval_det_wider(model, load=None, pad_mult=32, batch_size=32, iou_threshold=0
 
 
 def check_set_name(nm):
-    sets = ['FDDB', 'ICARTOON', 'PIXIV2018']
+    sets = ['FDDB', 'ICARTOON', 'PIXIV2018', 'PIXIV2018_ORIG']
     sets_txt = ', '.join(['"%s"' % s for s in sets])
     if nm not in sets:
         raise ValueError('Unknown set_name. Possible values are %s' % sets_txt)

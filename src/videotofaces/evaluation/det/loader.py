@@ -3,6 +3,7 @@ import os.path as osp
 import shutil
 
 from ...utils.download import url_download
+from . import extra
 
 
 def prepare_dataset(set_name):
@@ -39,7 +40,9 @@ def prepare_dataset(set_name):
             download_icartoon_images()
             download_icartoon_annotations()
         elif set_name == 'PIXIV2018':
-            download_pixiv2018_ORIG()    
+            download_pixiv2018()
+        elif set_name == 'PIXIV2018_ORIG':
+            extra.download_pixiv2018_ORIG()
     finally:
         os.chdir(cwd)
     return updir, imdir, gtdir
@@ -104,19 +107,10 @@ def download_icartoon_annotations():
     url_download(link, flnm, gdrive=True)
 
 
-def download_pixiv2018_ORIG():
-    """https://github.com/qhgz2013/anime-face-detector
-    3.09 GB, 6641 images (0-5999 - test, 6000-6640 - val)
-    """
-    #pip install py7zr
-    from py7zr import unpack_7zarchive
-    link = 'https://drive.google.com/uc?id=1nDPimhiwbAWc2diok-6davhubNVe82pr'
-    arcn = 'VOC2007-anime-face-detector-dataset.7z'
+def download_pixiv2018():
+    link = 'https://drive.google.com/uc?id=1TV8MCoWlaX9gztysihNgW53rnYdX_R4_'
+    arcn = 'PIXIV2018_1024px.zip'
     url_download(link, arcn, gdrive=True)
     print('Unpacking archive...')
-    shutil.register_unpack_format('7zip', ['.7z'], unpack_7zarchive)
     shutil.unpack_archive(arcn)
-    os.rename(osp.join('VOCdevkit2007', 'VOC2007', 'JPEGImages'), 'images')
-    os.rename(osp.join('VOCdevkit2007', 'VOC2007', 'Annotations'), 'ground_truth')
-    shutil.rmtree('VOCdevkit2007')
     os.remove(arcn)
