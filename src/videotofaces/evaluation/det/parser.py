@@ -29,10 +29,10 @@ def get_pixiv2018_data(gtdir):
             gti = []
             c = int(f.readline().rstrip())
             for _ in range(c):
-                box = [int(c) for c in f.readline().rstrip()]
+                box = [int(c) for c in f.readline().rstrip().split(' ')]
                 gti.append(box)
             gt.append(gti)
-            fn.append(fni)
+            fn.append(fni.rstrip())
             fni = f.readline()
     gt = [np.array(e) for e in gt]
     return fn, gt

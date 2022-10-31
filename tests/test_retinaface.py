@@ -30,7 +30,7 @@ class TestRetinaFace(unittest.TestCase):
         np.testing.assert_almost_equal(rb[1][4], np.array([931.3569, 213.46419, 981.17365, 282.21033, 0.98094]), decimal=4)
         np.testing.assert_almost_equal(rb[1][8], np.array([298.3359, 194.7117, 355.0907, 270.89612, 0.04269]), decimal=4)
         np.testing.assert_almost_equal(rb[2][1], np.array([451.18222, 312.8468, 506.44626, 387.151, 0.99937]), decimal=5)
-        np.testing.assert_almost_equal(rb[2][92], np.array([454.64337, 258.58246, 471.7198, 280.29694, 0.12272]), decimal=5)
+        np.testing.assert_almost_equal(rb[2][92], np.array([454.6434, 258.5825, 471.7198, 280.2969, 0.1227]), decimal=4)
         np.testing.assert_almost_equal(rb[3][12], np.array([196.038, 235.07074, 256.24564, 313.40533, 0.99574]), decimal=5)
         np.testing.assert_almost_equal(rb[3][-5], np.array([621.6558, 4.7005, 637.6158, 27.7780, 0.0208]), decimal=4)
 
@@ -52,7 +52,7 @@ class TestRetinaFace(unittest.TestCase):
         rb = model(imgs)
         self.assertEqual(rb[0].shape, (25, 5))
         self.assertEqual(rb[1].shape, (20, 5))
-        np.testing.assert_almost_equal(rb[0][2], np.array([46.03808, 242.75386, 102.02594, 305.60672, 0.88260]), decimal=5)
+        np.testing.assert_almost_equal(rb[0][2], np.array([46.0381, 242.7539, 102.0259, 305.6067, 0.8826]), decimal=4)
         np.testing.assert_almost_equal(rb[1][6], np.array([938.8128, 385.0291, 1023.2553, 528.7720, 0.8216]), decimal=4)
 
     def test_resnet152(self):

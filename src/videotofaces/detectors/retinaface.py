@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.ops
 
 from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV1
@@ -92,10 +93,11 @@ class RetinaFace(nn.Module):
     def preprocess(self, imgs):
         means, stds, swapRB = self.prep_params
         x = np.stack(imgs)
-        x = x if not swapRB else x[:, :, :, [2, 1, 0]]
-        x = (x - means) / stds
-        x = x.transpose(0, 3, 1, 2)
         x = torch.from_numpy(x).to(next(self.parameters()).device, torch.float32)
+        x = x if not swapRB else x[:, :, :, [2, 1, 0]]
+        x -= torch.tensor(list(means), device=x.device)
+        x /= torch.tensor(list(stds), device=x.device)
+        x = x.permute(0, 3, 1, 2)
         return x
 
     def forward(self, imgs):
@@ -111,45 +113,35 @@ class RetinaFace(nn.Module):
         scores = F.softmax(classif, dim=-1)[:, :, 1]
         priors = get_priors(x.shape[2:], self.bases).to(x.device)
         boxes = decode_boxes(box_reg, priors)
-        l = select_boxes(boxes, scores, score_thr=self.score_thr, iou_thr=0.4)
+        l = select_boxes(boxes, scores, score_thr=self.score_thr, iou_thr=0.4, impl='tvis_batched')
         return l
 
 
-def select_boxes(boxes, scores, score_thr, iou_thr, impl='vect', nms_impl='torch'):
-    assert impl in ['vect', 'loop']
-    assert nms_impl in ['torch', 'numpy']
+def select_boxes(boxes, scores, score_thr, iou_thr, impl):
+    assert impl in ['numpy', 'tvis', 'tvis_batched']
     n = boxes.shape[0]
-    
-    if impl == 'vect':
-        k = torch.arange(n).repeat_interleave(boxes.shape[1])
+    if impl == 'tvis_batched':
+        k = torch.arange(n).repeat_interleave(boxes.shape[1]).to(boxes.device)
         b, s = boxes.reshape(-1, 4), scores.flatten()
         idx = s > score_thr
-        k, b, s = k[idx], b[idx], s[idx]
-        if nms_impl == 'torch':
-            keep = bbox.batched_nms(b, s, k, iou_thr, 'torch')
-            k, b, s = k[keep], b[keep], s[keep]
-            r = torch.hstack([b, s.unsqueeze(1)])
-            l = [r[k == i] for i in range(n)]
-            return [t.detach().cpu().numpy() for t in l]
-        if nms_impl == 'numpy':
-            b, s, k = [x.detach().cpu().numpy() for x in [b, s, k]]
-            keep = bbox.batched_nms(b, s, k, iou_thr, 'numpy')
-            k, b, s = k[keep], b[keep], s[keep]
-            r = np.hstack([b, np.expand_dims(s, 1)])
-            l = [r[k == i] for i in range(n)]
-            return l
-
-    if impl == 'loop':
+        k, b, s = k[idx], b[idx], s[idx]    
+        keep = torchvision.ops.batched_nms(b, s, k, iou_thr)
+        k, b, s = k[keep], b[keep], s[keep]
+        r = torch.hstack([b, s.unsqueeze(1)])
+        l = [r[k == i] for i in range(n)]
+        return [t.detach().cpu().numpy() for t in l]
+    else:
         l = []
         for i in range(n):
             b, s = boxes[i], scores[i]
             idx = s > score_thr
             b, s = b[idx], s[idx]
             r = torch.hstack([b, s.unsqueeze(1)]).detach().cpu().numpy()
-            if nms_impl == 'torch':
-                keep = bbox.nms(b, s, iou_thr, 'torch')
+            if impl == 'tvis':
+                keep = torchvision.ops.nms(b, s, iou_thr)
+                keep = keep.detach().cpu().numpy()
             else:
-                keep = bbox.nms(r[:, :4], r[:, 4], iou_thr, 'numpy')
+                keep = bbox.nms(r[:, :4], r[:, 4], iou_thr)
             l.append(r[keep])
         return l
 

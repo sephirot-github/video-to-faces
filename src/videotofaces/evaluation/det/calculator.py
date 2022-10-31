@@ -64,19 +64,22 @@ def calc_pr_curve(pred, gt, iou_thr=0.5, num_score_thr=1000):
     
     print('Comparing predictions with ground truths (IoU threshold = %s)' % str(iou_thr))
     for k in tqdm(range(len(pred))):
-
+        
+        total_needed += len(gt[k])
+        if (len(pred[k]) == 0 or len(gt[k]) == 0):
+            continue
+            
         iou = calc_iou_matrix(pred[k][:, :4], gt[k].astype(np.float32))
         mx = iou.max(axis=1)
         mxj = iou.argmax(axis=1)
         pred_n_per_t = [np.count_nonzero(pred[k][:, 4] >= t) for t in score_thresholds]
-        
+
         mxj[mx < iou_thr] = -1
         idup = np.delete(np.arange(len(mx)), np.unique(mxj, return_index=True)[1])
         mxj[idup] = -1
         found_flags = (mxj >= 0).astype(int)
         found_cumsum = np.concatenate(([0], np.cumsum(found_flags)))
-
-        total_needed += len(gt[k])
+   
         det_needed += found_cumsum[pred_n_per_t]
         det_total += pred_n_per_t
         det_ious.extend(list(mx[found_flags == 1]))
