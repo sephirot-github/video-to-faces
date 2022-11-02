@@ -1,17 +1,14 @@
-import math
-
 import cv2
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.ops
 
 from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV1
 from ..backbones.resnet import ResNet50, ResNet152
-from ..utils.download import prep_weights_gdrive
-from ..utils import bbox
+from ..utils.download import prep_weights_gdrive, prep_weights_file
+from ..utils.bbox import get_priors, decode_boxes, select_boxes 
 
 # Source 1: https://github.com/biubug6/Pytorch_Retinaface
 # Source 2: https://github.com/barisbatuhan/FaceDetector
@@ -19,28 +16,77 @@ from ..utils import bbox
 
 
 class FPN(nn.Module):
-    def __init__(self, cins, cout, relu, extra_level):
-        super(FPN, self).__init__()
-        self.outputs = nn.ModuleList([ConvUnit(cin, cout, 1, 1, 0, relu) for cin in cins])
-        if extra_level: # corresponds to "P6" in the paper
-            self.extra = ConvUnit(cins[-1], cout, 3, 2, 1, relu)
-        self.merges = nn.ModuleList([ConvUnit(cout, cout, 3, 1, 1, relu) for _ in cins[1:]])
+    """
+    FPN paper (section 3 and figure 3) https://arxiv.org/pdf/1612.03144.pdf
+    RetinaNet paper (page 4 footnote 2) https://arxiv.org/pdf/1708.02002.pdf
+    RetinaFace paper (start of section 4.2) https://arxiv.org/pdf/1905.00641.pdf
 
-    def forward(self, xs):
-        n = len(xs)
-        ys = [self.outputs[i](xs[i]) for i in range(n)]
-        for i in range(0, n - 1)[::-1]:
-            ys[i] += F.interpolate(ys[i + 1], size=ys[i].shape[2:], mode='nearest')
-            ys[i] = self.merges[i](ys[i])
-        if hasattr(self, 'extra'):
-            ys.append(self.extra(xs[-1]))
-        return ys
+    example: https://github.com/kuangliu/pytorch-fpn/blob/master/fpn.py
+    tvision: https://github.com/pytorch/vision/blob/main/torchvision/ops/feature_pyramid_network.py
+
+    ResNet outputs: C2, C3, C4, C5 ({4, 8, 16, 32} stride w.r.t. the input image)
+        
+    Ti = lateral(Ci) [i=2..5]
+    P5 = T5
+    P4 = T4 + upsample(P5)
+    P3 = T3 + upsample(P4)
+    P2 = T2 + upsample(P2)
+    Pi = smooth(Pi) [i=2..4] (or 5 too)
+
+    P6 = extra1(C5) [or P5]
+    P7 = extra2(relu(P6))
+
+    smoothBeforeMerge is a mistake: https://github.com/biubug6/Pytorch_Retinaface/blob/master/models/net.py
+    from the paper: "Finally, we append a 3×3 convolution on each merged map"
+
+    smoothP5 is probably a mistake too: https://github.com/barisbatuhan/FaceDetector/blob/main/BBTNet/components/fpn.py
+    but both torchvision and detectron2 implementations seem to be using it
+    from the paper, same paragraph: "which is to reduce the aliasing effect of upsampling" (but P5 have no upsampling)
+    """
+
+    def __init__(self, cins, cout, relu, bn=1e-05, P6=None, P7=None, smoothP5=False, smoothBeforeMerge=False):
+        super().__init__()
+        assert P6 in ['fromC5', 'fromP5', None]
+        self.P6 = P6
+        self.P7 = P7
+        self.smoothP5 = smoothP5
+        self.smoothBeforeMerge = smoothBeforeMerge
+        smooth_n = len(cins) - (0 if smoothP5 else 1)
+        self.conv_laterals = nn.ModuleList([ConvUnit(cin, cout, 1, 1, 0, relu, bn) for cin in cins])
+        self.conv_smooths = nn.ModuleList([ConvUnit(cout, cout, 3, 1, 1, relu, bn) for _ in range(smooth_n)])
+        if P6:
+            cin6 = cins[-1] if P6 == 'fromC5' else cout
+            self.conv_extra1 = ConvUnit(cin6, cout, 3, 2, 1, relu, bn)
+        if P7:
+            self.conv_extra2 = ConvUnit(cout, cout, 3, 2, 1, relu, bn)
+
+    def forward(self, C):
+        n = len(C)
+        P = [self.conv_laterals[i](C[i]) for i in range(n)]
+        
+        if not self.smoothBeforeMerge:
+            for i in range(0, n - 1)[::-1]:
+                P[i] += F.interpolate(P[i + 1], size=P[i].shape[2:], mode='nearest')
+            P = [self.conv_smooths[i](P[i]) for i in range(len(self.conv_smooths))]
+        else:
+            # no variation with smoothP5 = smoothBeforeMerge = True found so far
+            #if self.smoothP5: P[-1] = self.conv_smooths[-1](P[-1])
+            for i in range(0, n - 1)[::-1]:
+                P[i] += F.interpolate(P[i + 1], size=P[i].shape[2:], mode='nearest')
+                P[i] = self.conv_smooths[i](P[i])
+        
+        if self.P6:
+            P.append(self.conv_extra1(C[-1] if self.P6 == 'fromC5' else P[-1]))
+        if self.P7:
+            P.append(self.conv_extra2(F.relu(P[-1])))
+
+        return P
 
 
 class SSH(nn.Module):
 
     def __init__(self, cin, cout, relu):
-        super(SSH, self).__init__()
+        super().__init__()
         self.conv1 = ConvUnit(cin, cout//2, 3, 1, 1, relu_type=None)
         self.conv2 = ConvUnit(cin, cout//4, 3, 1, 1, relu_type=relu)
         self.conv3 = ConvUnit(cout//4, cout//4, 3, 1, 1, relu_type=None)
@@ -60,7 +106,7 @@ class SSH(nn.Module):
 class Head(nn.Module):
 
     def __init__(self, cin, num_anchors, task_len):
-        super(Head, self).__init__()
+        super().__init__()
         self.task_len = task_len
         self.conv = nn.Conv2d(cin, num_anchors * task_len, kernel_size=1)
     
@@ -70,38 +116,39 @@ class Head(nn.Module):
         return x
 
 
+def preprocess(imgs, params, device):
+    to0_1, swapRB, mean, std = params
+    x = np.stack(imgs)
+    x = torch.from_numpy(x).to(device, torch.float32)
+    if to0_1: x /= 255
+    x = x if not swapRB else x[:, :, :, [2, 1, 0]]
+    x -= torch.tensor(list(mean), device=x.device)
+    x /= torch.tensor(list(std), device=x.device)
+    x = x.permute(0, 3, 1, 2)
+    return x
+
+
 class RetinaFace(nn.Module):
 
-    def __init__(self, backbone, arch_params, prep_params, bases, score_thr, predict_landmarks):
-        super(RetinaFace, self).__init__()
-        self.prep_params = prep_params
+    def __init__(self, backbone, cins, cout, relu, bn, P6, smoothP5, smoothBefore,
+                 to0_1, swapRB, mean, std, bases, score_thr, predict_landmarks):
+        super().__init__()
+        self.prep_params = (to0_1, swapRB, mean, std)
         self.bases = bases
         self.score_thr = score_thr
-
-        cins, cout, relu, extra = arch_params
         num_anchors = len(bases[0][1])
-        num_levels = len(cins) + (1 if extra else 0)
+        num_levels = len(cins) + (1 if P6 else 0)
 
         self.body = backbone
-        self.feature_pyramid = FPN(cins, cout, relu, extra)
+        self.feature_pyramid = FPN(cins, cout, relu, 1e-05, P6, None, smoothP5, smoothBefore)
         self.context_modules = nn.ModuleList([SSH(cout, cout, relu) for _ in range(num_levels)])
         self.heads_class = nn.ModuleList([Head(cout, num_anchors, 2) for _ in range(num_levels)])
         self.heads_boxes = nn.ModuleList([Head(cout, num_anchors, 4) for _ in range(num_levels)])
         if predict_landmarks:
             self.heads_ldmks = nn.ModuleList([Head(cout, num_anchors, 10) for _ in range(num_levels)])
 
-    def preprocess(self, imgs):
-        means, stds, swapRB = self.prep_params
-        x = np.stack(imgs)
-        x = torch.from_numpy(x).to(next(self.parameters()).device, torch.float32)
-        x = x if not swapRB else x[:, :, :, [2, 1, 0]]
-        x -= torch.tensor(list(means), device=x.device)
-        x /= torch.tensor(list(stds), device=x.device)
-        x = x.permute(0, 3, 1, 2)
-        return x
-
     def forward(self, imgs):
-        x = self.preprocess(imgs)
+        x = preprocess(imgs, self.prep_params, next(self.parameters()).device)
         xs = self.body(x)
         xs = self.feature_pyramid(xs)
         xs = [self.context_modules[i](xs[i]) for i in range(len(xs))]
@@ -117,80 +164,30 @@ class RetinaFace(nn.Module):
         return l
 
 
-def select_boxes(boxes, scores, score_thr, iou_thr, impl):
-    assert impl in ['numpy', 'tvis', 'tvis_batched']
-    n = boxes.shape[0]
-    if impl == 'tvis_batched':
-        k = torch.arange(n).repeat_interleave(boxes.shape[1]).to(boxes.device)
-        b, s = boxes.reshape(-1, 4), scores.flatten()
-        idx = s > score_thr
-        k, b, s = k[idx], b[idx], s[idx]    
-        keep = torchvision.ops.batched_nms(b, s, k, iou_thr)
-        k, b, s = k[keep], b[keep], s[keep]
-        r = torch.hstack([b, s.unsqueeze(1)])
-        l = [r[k == i] for i in range(n)]
-        return [t.detach().cpu().numpy() for t in l]
-    else:
-        l = []
-        for i in range(n):
-            b, s = boxes[i], scores[i]
-            idx = s > score_thr
-            b, s = b[idx], s[idx]
-            r = torch.hstack([b, s.unsqueeze(1)]).detach().cpu().numpy()
-            if impl == 'tvis':
-                keep = torchvision.ops.nms(b, s, iou_thr)
-                keep = keep.detach().cpu().numpy()
-            else:
-                keep = bbox.nms(r[:, :4], r[:, 4], iou_thr)
-            l.append(r[keep])
-        return l
+class RetinaNet(nn.Module):
 
+    def __init__(self):
+        super(RetinaNet, self).__init__()
+        backbone = ResNet50(return_count=3, bn_eps=0.0)
+        cins, cout = [512, 1024, 2048], 256
+        relu, bn = None, None
+        P6, P7, smoothP5 = 'fromP5', True, True
 
-def get_priors(img_size, bases):
-    """For every (stride, anchors) pair in ``bases`` list, walk through every stride-sized
-    square patch of ``img_size`` canvas left-right, top-bottom and return anchors-sized boxes
-    drawn around each patch's center in a form of (center_x, center_y, width, height).
-    
-    Example: get_priors((90, 64), [(32, [(8, 4), (25, 15)])])
-    Output: shape = (12, 4)
-    [[16, 16, 8, 4], [16, 16, 25, 15], [48, 16, 8, 4], [48, 16, 25, 15],
-     [16, 48, 8, 4], [16, 48, 25, 15], [48, 48, 8, 4], [48, 48, 25, 15],
-     [16, 80, 8, 4], [16, 80, 25, 15], [48, 80, 8, 4], [48, 80, 25, 15]]
+        bases = [
+                (8,   [(45, 23), (57, 28), (71, 35),          (32, 32), (40, 40), (50, 50),          (23, 45), (28, 57), (35, 71)]),
+                (16,  [(91, 45), (113, 57), (143, 71),        (64, 64), (80, 80), (101, 101),        (45, 91), (57, 113), (71, 143)]),
+                (32,  [(181, 91), (228, 114), (287, 144),     (128, 128), (161, 161), (203, 203),    (91, 181), (114, 228), (144, 287)]),
+                (64,  [(362, 181), (455, 228), (574, 287),    (256, 256), (322, 322), (406, 406),    (181, 362), (228, 455), (287, 574)]),
+                (128, [(724, 362), (912, 456), (1148, 574),   (512, 512), (645, 645), (812, 812),    (362, 724), (456, 912), (574, 1148)])
+            ]
+        #anchor_sizes = tuple((x, int(x * 2 ** (1.0 / 3)), int(x * 2 ** (2.0 / 3))) for x in [32, 64, 128, 256, 512])
+        #aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
+        #areas = (32, 40, 50), (64, 80, 101), (128, 161, 203), (256, 322, 406), (512, 645, 812)
+        #ratios = (0.5, 1.0, 2.0)
 
-    In case of square anchors, only one dimension can be provided, i.e. [(8, [16, 32])]
-    will be automatically turned into [(8, [(16, 16), (32, 32)])].
-    """
-    p = []
-    h, w = img_size
-    if isinstance(bases[0][1][0], int):
-        bases = [(s, [(a, a) for a in l]) for (s, l) in bases]
-    for stride, anchors in bases:
-        nx = math.ceil(w / stride)
-        ny = math.ceil(h / stride)
-        xs = torch.arange(nx) * stride + stride // 2
-        ys = torch.arange(ny) * stride + stride // 2
-        c = torch.dstack(torch.meshgrid(xs, ys, indexing='xy')).reshape(-1, 2)
-        # could replace line above by "torch.cartesian_prod(xs, ys)" but that'd be for indexing='ij'
-        c = c.repeat_interleave(len(anchors), dim=0)
-        s = torch.Tensor(anchors).repeat(nx*ny, 1)
-        p.append(torch.hstack([c, s]))
-    return torch.cat(p)
-
-
-def decode_boxes(pred, priors):
-    """Converts predicted boxes from network outputs into actual image coordinates based on some
-    fixed starting ``priors`` using Eq.1-4 from here: https://arxiv.org/pdf/1311.2524.pdf
-    (as linked by Fast R-CNN paper, which is in turn linked by RetinaFace paper).
-
-    Multipliers 0.1 and 0.2 are often referred to as "variances" in various implementations and used
-    for normalizing/numerical stability purposes when encoding boxes for training (and thus are needed
-    here too for scaling the numbers back). See https://github.com/rykov8/ssd_keras/issues/53 and
-    https://leimao.github.io/blog/Bounding-Box-Encoding-Decoding/#Representation-Encoding-With-Variance
-    """
-    xys = priors[:, 2:] * 0.1 * pred[:, :, :2] + priors[:, :2]
-    whs = priors[:, 2:] * torch.exp(0.2 * pred[:, :, 2:])
-    boxes = torch.cat([xys - whs / 2, xys + whs / 2], dim=-1)
-    return boxes
+        self.body = backbone
+        self.feature_pyramid = FPN(cins, cout, relu, bn, P6, P7, smoothP5)
+        
 
 
 class RetinaFaceDetector():
@@ -211,6 +208,8 @@ class RetinaFaceDetector():
         weights_filename = 'retinaface_%s.pth' % source
         print('Initializing RetinaFace model (%s) for face detection' % source)
 
+        bn = 1e-05
+        
         if source.startswith('biubug6_'):
             bases = [
                 (8, [16, 32]),
@@ -218,18 +217,20 @@ class RetinaFaceDetector():
                 (32, [256, 512])
             ]
             score_thr, predict_landmarks = 0.02, True
-            prep_params = ((104, 117, 123), (1, 1, 1), False)
+            to0_1, swapRB, mean, std = False, False, (104, 117, 123), (1, 1, 1) # mean values from ImageNet in GRB
+            P6, smoothP5, smoothBefore = None, False, True
             if source == 'biubug6_mobilenet':
                 backbone = MobileNetV1(0.25, relu_type='lrelu_0.1', return_inter=[5, 11])
-                arch_params = ([64, 128, 256], 64, 'lrelu_0.1', False)
+                cins, cout, relu = [64, 128, 256], 64, 'lrelu_0.1'
             elif source == 'biubug6_resnet50':
                 backbone = ResNet50(return_count=3)
-                arch_params = ([512, 1024, 2048], 256, 'plain', False)
+                cins, cout, relu = [512, 1024, 2048], 256, 'plain'
             wf = prep_weights_gdrive(self.gids[source], weights_filename)
             wd_src = torch.load(wf, map_location=torch.device(device))
 
         elif source.startswith('bbt_'):
             bases = [
+                # scales: x, x * 2 ** (1.0 / 3), x * 2 ** (2.0 / 3)
                 (4, [16, 20.16, 25.40]),
                 (8, [32, 40.32, 50.80]),
                 (16, [64, 80.63, 101.59]),
@@ -237,16 +238,27 @@ class RetinaFaceDetector():
                 (64, [256, 322.54, 406.37])
             ]
             score_thr, predict_landmarks = 0.5, False
-            prep_params = ((123.675, 116.28, 103.53), (58.395, 57.12, 57.375), True)
-            arch_params = ([256, 512, 1024, 2048], 256, 'plain', True)
+            to0_1, swapRB, mean, std = False, True, (123.675, 116.28, 103.53), (58.395, 57.12, 57.375)
+            #to0_1, swapRB, mean, std = True, True, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+            cins, cout, relu = [256, 512, 1024, 2048], 256, 'plain'
+            P6, smoothP5, smoothBefore = 'fromC5', False, True
             backbone = ResNet152() if source == 'bbt_resnet152_mixed' else ResNet50()
             wf = prep_weights_gdrive(self.gids[source], weights_filename)
             wd_src = torch.load(wf, map_location=torch.device(device))
             for s in ['conv.weight', 'bn.weight', 'bn.bias', 'bn.running_mean',
                       'bn.running_var', 'bn.num_batches_tracked']:
                 wd_src.pop('fpn.lateral_outs.3.' + s)
-        
-        self.model = RetinaFace(backbone, arch_params, prep_params, bases, score_thr, predict_landmarks).to(device)
+            # in this source, FPN extra P6 layer is placed between laterals and smooths, but we need after
+            wl = list(wd_src.items())
+            idx = [i for i, (n, _) in enumerate(wl) if n.startswith('fpn.lateral_ins.4')]
+            els = [wl.pop(idx[0]) for _ in idx]
+            pos = [i for i, (n, _) in enumerate(wl) if n.startswith('fpn.lateral_outs.')][-1]
+            for el in els[::-1]:
+                wl.insert(pos + 1, el)
+            wd_src = dict(wl)
+      
+        self.model = RetinaFace(backbone, cins, cout, relu, bn, P6, smoothP5, smoothBefore,
+                                to0_1, swapRB, mean, std, bases, score_thr, predict_landmarks).to(device)
         #for w in self.model.state_dict(): print(w, '\t', self.model.state_dict()[w].shape)
         wd_dst = {}
         names = list(wd_src)

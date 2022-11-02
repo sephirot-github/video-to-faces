@@ -4,12 +4,16 @@ import torch.nn as nn
 
 class ConvUnit(nn.Module):
 
-    def __init__(self, cin, cout, k, s, p, relu_type, bn_eps=1e-05, cbias=False, grp=1):
+    def __init__(self, cin, cout, k, s, p, relu_type, bn=1e-05, grp=1):
         super(ConvUnit, self).__init__()
         cin, cout, grp = int(cin), int(cout), int(grp)
 
-        self.conv = nn.Conv2d(cin, cout, k, s, p, groups=grp, bias=cbias)
-        self.bn = nn.BatchNorm2d(cout, eps=bn_eps)
+        self.conv = nn.Conv2d(cin, cout, k, s, p, groups=grp, bias=bn is None)
+        
+        if bn == None:
+            self.bn = None
+        else:
+            self.bn = nn.BatchNorm2d(cout, eps=bn)
 
         if relu_type == None:
             self.relu = None
@@ -24,7 +28,8 @@ class ConvUnit(nn.Module):
 
     def forward(self, x):
         x = self.conv(x)
-        x = self.bn(x)
+        if self.bn:
+            x = self.bn(x)
         if self.relu:
             x = self.relu(x)
         return x
