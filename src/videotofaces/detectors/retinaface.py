@@ -36,21 +36,18 @@ class FPN(nn.Module):
     P6 = extra1(C5) [or P5]
     P7 = extra2(relu(P6))
 
-    smoothBeforeMerge is a mistake: https://github.com/biubug6/Pytorch_Retinaface/blob/master/models/net.py
-    from the paper: "Finally, we append a 3×3 convolution on each merged map"
-
-    smoothP5 is probably a mistake too: https://github.com/barisbatuhan/FaceDetector/blob/main/BBTNet/components/fpn.py
-    but both torchvision and detectron2 implementations seem to be using it
+    smoothP5 is probably a mistake, but both torchvision and detectron2 implementations seem to be using it
     from the paper, same paragraph: "which is to reduce the aliasing effect of upsampling" (but P5 have no upsampling)
     """
 
-    def __init__(self, cins, cout, relu, bn=1e-05, P6=None, P7=None, smoothP5=False, smoothBeforeMerge=False):
+    def __init__(self, cins, cout, relu, bn=1e-05, P6=None, P7=None,
+                 smoothP5=False, smoothBeforeMerge=False, nonCumulative=False):
         super().__init__()
         assert P6 in ['fromC5', 'fromP5', None]
         self.P6 = P6
         self.P7 = P7
-        self.smoothP5 = smoothP5
         self.smoothBeforeMerge = smoothBeforeMerge
+        self.nonCumulative = nonCumulative
         smooth_n = len(cins) - (0 if smoothP5 else 1)
         self.conv_laterals = nn.ModuleList([ConvUnit(cin, cout, 1, 1, 0, relu, bn) for cin in cins])
         self.conv_smooths = nn.ModuleList([ConvUnit(cout, cout, 3, 1, 1, relu, bn) for _ in range(smooth_n)])
@@ -64,15 +61,23 @@ class FPN(nn.Module):
         n = len(C)
         P = [self.conv_laterals[i](C[i]) for i in range(n)]
         
-        if not self.smoothBeforeMerge:
-            for i in range(0, n - 1)[::-1]:
+        if self.nonCumulative:
+            # mistake from: https://github.com/barisbatuhan/FaceDetector/blob/main/BBTNet/components/fpn.py
+            P = [P[i] + F.interpolate(P[i + 1], size=P[i].shape[2:], mode='nearest') for i in range(len(P) - 1)] + [P[-1]]
+            for i in range(len(self.conv_smooths)):
+                P[i] = self.conv_smooths[i](P[i])
+        elif self.smoothBeforeMerge:
+            # mistake from: https://github.com/biubug6/Pytorch_Retinaface/blob/master/models/net.py
+            # from the paper: "Finally, we append a 3×3 convolution on each merged map"
+            # P5 is never smoothed here (smoothP5 is ignored)
+            for i in range(n - 1)[::-1]:
                 P[i] += F.interpolate(P[i + 1], size=P[i].shape[2:], mode='nearest')
-            P = [self.conv_smooths[i](P[i]) for i in range(len(self.conv_smooths))]
+                P[i] = self.conv_smooths[i](P[i])
         else:
-            # no variation with smoothP5 = smoothBeforeMerge = True found so far
-            #if self.smoothP5: P[-1] = self.conv_smooths[-1](P[-1])
-            for i in range(0, n - 1)[::-1]:
+            # normal pathway
+            for i in range(n - 1)[::-1]:
                 P[i] += F.interpolate(P[i + 1], size=P[i].shape[2:], mode='nearest')
+            for i in range(len(self.conv_smooths)):
                 P[i] = self.conv_smooths[i](P[i])
         
         if self.P6:
@@ -130,7 +135,7 @@ def preprocess(imgs, params, device):
 
 class RetinaFace(nn.Module):
 
-    def __init__(self, backbone, cins, cout, relu, bn, P6, smoothP5, smoothBefore,
+    def __init__(self, backbone, cins, cout, relu, bn, P6, smoothP5, smoothBefore, nonCumulative,
                  to0_1, swapRB, mean, std, bases, score_thr, predict_landmarks):
         super().__init__()
         self.prep_params = (to0_1, swapRB, mean, std)
@@ -140,7 +145,7 @@ class RetinaFace(nn.Module):
         num_levels = len(cins) + (1 if P6 else 0)
 
         self.body = backbone
-        self.feature_pyramid = FPN(cins, cout, relu, 1e-05, P6, None, smoothP5, smoothBefore)
+        self.feature_pyramid = FPN(cins, cout, relu, 1e-05, P6, None, smoothP5, smoothBefore, nonCumulative)
         self.context_modules = nn.ModuleList([SSH(cout, cout, relu) for _ in range(num_levels)])
         self.heads_class = nn.ModuleList([Head(cout, num_anchors, 2) for _ in range(num_levels)])
         self.heads_boxes = nn.ModuleList([Head(cout, num_anchors, 4) for _ in range(num_levels)])
@@ -160,7 +165,7 @@ class RetinaFace(nn.Module):
         scores = F.softmax(classif, dim=-1)[:, :, 1]
         priors = get_priors(x.shape[2:], self.bases).to(x.device)
         boxes = decode_boxes(box_reg, priors)
-        l = select_boxes(boxes, scores, score_thr=self.score_thr, iou_thr=0.4, impl='tvis_batched')
+        l = select_boxes(boxes, scores, score_thr=self.score_thr, iou_thr=0.4, impl='tvis')
         return l
 
 
@@ -209,6 +214,7 @@ class RetinaFaceDetector():
         print('Initializing RetinaFace model (%s) for face detection' % source)
 
         bn = 1e-05
+        smoothP5, smoothBefore, nonCumulative = False, False, False
         
         if source.startswith('biubug6_'):
             bases = [
@@ -218,7 +224,8 @@ class RetinaFaceDetector():
             ]
             score_thr, predict_landmarks = 0.02, True
             to0_1, swapRB, mean, std = False, False, (104, 117, 123), (1, 1, 1) # mean values from ImageNet in GRB
-            P6, smoothP5, smoothBefore = None, False, True
+            P6 = None
+            smoothBefore = True
             if source == 'biubug6_mobilenet':
                 backbone = MobileNetV1(0.25, relu_type='lrelu_0.1', return_inter=[5, 11])
                 cins, cout, relu = [64, 128, 256], 64, 'lrelu_0.1'
@@ -241,13 +248,14 @@ class RetinaFaceDetector():
             #to0_1, swapRB, mean, std = False, True, (123.675, 116.28, 103.53), (58.395, 57.12, 57.375)
             to0_1, swapRB, mean, std = True, True, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
             cins, cout, relu = [256, 512, 1024, 2048], 256, 'plain'
-            P6, smoothP5, smoothBefore = 'fromC5', True, False
+            P6 = 'fromC5'
+            nonCumulative = True
             backbone = ResNet152() if source == 'bbt_resnet152_mixed' else ResNet50()
             wf = prep_weights_gdrive(self.gids[source], weights_filename)
             wd_src = torch.load(wf, map_location=torch.device(device))
-            #for s in ['conv.weight', 'bn.weight', 'bn.bias', 'bn.running_mean',
-            #          'bn.running_var', 'bn.num_batches_tracked']:
-            #    wd_src.pop('fpn.lateral_outs.3.' + s)
+            for s in ['conv.weight', 'bn.weight', 'bn.bias', 'bn.running_mean',
+                      'bn.running_var', 'bn.num_batches_tracked']:
+                wd_src.pop('fpn.lateral_outs.3.' + s)
             # in this source, FPN extra P6 layer is placed between laterals and smooths, but we need after
             wl = list(wd_src.items())
             idx = [i for i, (n, _) in enumerate(wl) if n.startswith('fpn.lateral_ins.4')]
@@ -257,7 +265,7 @@ class RetinaFaceDetector():
                 wl.insert(pos + 1, el)
             wd_src = dict(wl)
       
-        self.model = RetinaFace(backbone, cins, cout, relu, bn, P6, smoothP5, smoothBefore,
+        self.model = RetinaFace(backbone, cins, cout, relu, bn, P6, smoothP5, smoothBefore, nonCumulative,
                                 to0_1, swapRB, mean, std, bases, score_thr, predict_landmarks).to(device)
         #for w in self.model.state_dict(): print(w, '\t', self.model.state_dict()[w].shape)
         wd_dst = {}

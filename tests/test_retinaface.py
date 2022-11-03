@@ -50,20 +50,20 @@ class TestRetinaFace(unittest.TestCase):
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [3, 4]]
         rb = model(imgs)
-        self.assertEqual(rb[0].shape, (25, 5))
-        self.assertEqual(rb[1].shape, (20, 5))
-        np.testing.assert_almost_equal(rb[0][2], np.array([46.0381, 242.7539, 102.0259, 305.6067, 0.8826]), decimal=4)
-        np.testing.assert_almost_equal(rb[1][6], np.array([938.8128, 385.0291, 1023.2553, 528.7720, 0.8216]), decimal=4)
+        self.assertEqual(rb[0].shape, (43, 5))
+        self.assertEqual(rb[1].shape, (27, 5)) 
+        np.testing.assert_almost_equal(rb[0][2], np.array([162.3630, 301.0547, 217.6370, 372.3162, 0.9209]), decimal=4)
+        np.testing.assert_almost_equal(rb[1][6], np.array([398.3187, 309.1938, 479.2593, 406.1411, 0.8273]), decimal=4)
 
     def test_resnet152(self):
         model = RetinaFaceDetector('bbt_resnet152_mixed')
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [3, 4]]
         rb = model(imgs)
-        self.assertEqual(rb[0].shape, (30, 5))
-        self.assertEqual(rb[1].shape, (23, 5))
-        np.testing.assert_almost_equal(rb[0][1], np.array([784.3955, 445.4317, 851.0759, 523.5582, 0.9040]), decimal=4)
-        np.testing.assert_almost_equal(rb[1][4], np.array([396.81052, 308.52844, 479.42703, 406.57416, 0.83383]), decimal=5)
+        self.assertEqual(rb[0].shape, (43, 5))
+        self.assertEqual(rb[1].shape, (26, 5))
+        np.testing.assert_almost_equal(rb[0][1], np.array([46.0378, 243.8717, 103.3133, 305.6753, 0.9241]), decimal=4)
+        np.testing.assert_almost_equal(rb[1][4], np.array([24.19395, 221.45657, 83.07513, 294.79721, 0.85426]), decimal=5)
 
 
 if __name__ == '__main__':
