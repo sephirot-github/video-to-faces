@@ -1,3 +1,5 @@
+import math
+
 import cv2
 import numpy as np
 import torch
@@ -8,7 +10,8 @@ from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV1
 from ..backbones.resnet import ResNet50, ResNet152
 from ..utils.download import prep_weights_gdrive, prep_weights_file
-from ..utils.bbox import get_priors, decode_boxes, select_boxes 
+from .shared.prep import preprocess
+from .shared.bbox import get_priors, decode_boxes, select_boxes
 
 # Source 1: https://github.com/biubug6/Pytorch_Retinaface
 # Source 2: https://github.com/barisbatuhan/FaceDetector
@@ -121,24 +124,35 @@ class Head(nn.Module):
         return x
 
 
-def preprocess(imgs, params, device):
-    to0_1, swapRB, mean, std = params
-    x = np.stack(imgs)
-    x = torch.from_numpy(x).to(device, torch.float32)
-    if to0_1: x /= 255
-    x = x if not swapRB else x[:, :, :, [2, 1, 0]]
-    x -= torch.tensor(list(mean), device=x.device)
-    x /= torch.tensor(list(std), device=x.device)
-    x = x.permute(0, 3, 1, 2)
-    return x
+class Head2(nn.Module):
 
+    def __init__(self, c, num_anchors, task_len):
+        super().__init__()
+        self.task_len = task_len
+        self.conv = nn.ModuleList([ConvUnit(c, c, 3, 1, 1, relu_type='plain', bn=None) for _ in range(4)])
+        self.final = nn.Conv2d(c, num_anchors * task_len, kernel_size=3, padding=1)
+    
+    def forward(self, x):
+        x = self.final(self.conv(x)).permute(0, 2, 3, 1)
+        #N, _, H, W = cls_logits.shape
+        #cls_logits = cls_logits.view(N, -1, self.num_classes, H, W)
+        #cls_logits = cls_logits.permute(0, 3, 4, 1, 2)
+        #cls_logits = cls_logits.reshape(N, -1, self.num_classes)  # Size=(N, HWA, 4)
+
+        #N, _, H, W = bbox_regression.shape
+        #bbox_regression = bbox_regression.view(N, -1, 4, H, W)
+        #bbox_regression = bbox_regression.permute(0, 3, 4, 1, 2)
+        #bbox_regression = bbox_regression.reshape(N, -1, 4)  # Size=(N, HWA, 4)
+        x = x.reshape(x.shape[0], -1, self.task_len)
+        return x
+    
 
 class RetinaFace(nn.Module):
 
     def __init__(self, backbone, cins, cout, relu, bn, P6, smoothP5, smoothBefore, nonCumulative,
                  to0_1, swapRB, mean, std, bases, score_thr, predict_landmarks):
         super().__init__()
-        self.prep_params = (to0_1, swapRB, mean, std)
+        self.norm_params = (to0_1, swapRB, mean, std)
         self.bases = bases
         self.score_thr = score_thr
         num_anchors = len(bases[0][1])
@@ -152,8 +166,9 @@ class RetinaFace(nn.Module):
         if predict_landmarks:
             self.heads_ldmks = nn.ModuleList([Head(cout, num_anchors, 10) for _ in range(num_levels)])
 
-    def forward(self, imgs):
-        x = preprocess(imgs, self.prep_params, next(self.parameters()).device)
+    def forward(self, imgs, allow_var_sizes):
+        dv = next(self.parameters()).device
+        x, _ = preprocess(imgs, dv, self.norm_params, allow_var_sizes)
         xs = self.body(x)
         xs = self.feature_pyramid(xs)
         xs = [self.context_modules[i](xs[i]) for i in range(len(xs))]
@@ -177,6 +192,7 @@ class RetinaNet(nn.Module):
         cins, cout = [512, 1024, 2048], 256
         relu, bn = None, None
         P6, P7, smoothP5 = 'fromP5', True, True
+        self.norm_params = (True, True, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 
         bases = [
                 (8,   [(45, 23), (57, 28), (71, 35),          (32, 32), (40, 40), (50, 50),          (23, 45), (28, 57), (35, 71)]),
@@ -192,7 +208,43 @@ class RetinaNet(nn.Module):
 
         self.body = backbone
         self.feature_pyramid = FPN(cins, cout, relu, bn, P6, P7, smoothP5)
-        
+        self.cls_head = Head2(cout, 9, 91)
+        self.reg_head = Head2(cout, 9, 4)
+    
+    def forward(self, imgs, allow_var_sizes):
+        dv = next(self.parameters()).device
+        x, sb = preprocess(imgs, dv, self.norm_params, allow_var_sizes)
+        xs = self.body(x)
+        xs = self.feature_pyramid(xs)
+        return xs
+
+
+class RetinaNetDetector():
+    def __init__(self, device=None):
+        if not device:
+            device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        wf = prep_weights_file('https://download.pytorch.org/models/retinanet_resnet50_fpn_coco-eeacb38b.pth', 'retinanet_torchvision_resnet50_coco.pth')
+        wd_src = torch.load(wf, map_location=torch.device(device))
+    
+        self.model = RetinaNet().to(device)
+        #for w in self.model.state_dict(): print(w, '\t', self.model.state_dict()[w].shape)
+        wd_dst = {}
+        names = list(wd_src)
+        shift = 0
+        for i, w in enumerate(list(self.model.state_dict())):
+            if w.endswith('num_batches_tracked'):
+                wd_dst[w] = torch.tensor(0)
+                shift += 1
+            else:
+                #print(names[i], ' to ', w)
+                wd_dst[w] = wd_src[names[i - shift]]
+        self.model.load_state_dict(wd_dst)
+        self.model.eval()
+
+    def __call__(self, imgs, allow_var_sizes=False):
+        with torch.no_grad():
+            res = self.model(imgs, allow_var_sizes)
+        return res
 
 
 class RetinaFaceDetector():
@@ -253,6 +305,7 @@ class RetinaFaceDetector():
             backbone = ResNet152() if source == 'bbt_resnet152_mixed' else ResNet50()
             wf = prep_weights_gdrive(self.gids[source], weights_filename)
             wd_src = torch.load(wf, map_location=torch.device(device))
+            # in this source, smoothP5 is not applied but the layer is still created for it for no reason
             for s in ['conv.weight', 'bn.weight', 'bn.bias', 'bn.running_mean',
                       'bn.running_var', 'bn.num_batches_tracked']:
                 wd_src.pop('fpn.lateral_outs.3.' + s)
@@ -276,7 +329,7 @@ class RetinaFaceDetector():
         self.model.load_state_dict(wd_dst)
         self.model.eval()
 
-    def __call__(self, imgs):
+    def __call__(self, imgs, allow_var_sizes=False):
         with torch.no_grad():
-            res = self.model(imgs)
+            res = self.model(imgs, allow_var_sizes)
         return res
