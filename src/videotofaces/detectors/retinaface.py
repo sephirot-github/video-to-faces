@@ -238,16 +238,16 @@ class RetinaFaceDetector():
                 (64, [256, 322.54, 406.37])
             ]
             score_thr, predict_landmarks = 0.5, False
-            to0_1, swapRB, mean, std = False, True, (123.675, 116.28, 103.53), (58.395, 57.12, 57.375)
-            #to0_1, swapRB, mean, std = True, True, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+            #to0_1, swapRB, mean, std = False, True, (123.675, 116.28, 103.53), (58.395, 57.12, 57.375)
+            to0_1, swapRB, mean, std = True, True, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
             cins, cout, relu = [256, 512, 1024, 2048], 256, 'plain'
-            P6, smoothP5, smoothBefore = 'fromC5', False, True
+            P6, smoothP5, smoothBefore = 'fromC5', True, False
             backbone = ResNet152() if source == 'bbt_resnet152_mixed' else ResNet50()
             wf = prep_weights_gdrive(self.gids[source], weights_filename)
             wd_src = torch.load(wf, map_location=torch.device(device))
-            for s in ['conv.weight', 'bn.weight', 'bn.bias', 'bn.running_mean',
-                      'bn.running_var', 'bn.num_batches_tracked']:
-                wd_src.pop('fpn.lateral_outs.3.' + s)
+            #for s in ['conv.weight', 'bn.weight', 'bn.bias', 'bn.running_mean',
+            #          'bn.running_var', 'bn.num_batches_tracked']:
+            #    wd_src.pop('fpn.lateral_outs.3.' + s)
             # in this source, FPN extra P6 layer is placed between laterals and smooths, but we need after
             wl = list(wd_src.items())
             idx = [i for i, (n, _) in enumerate(wl) if n.startswith('fpn.lateral_ins.4')]
