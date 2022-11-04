@@ -10,8 +10,7 @@ from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV1
 from ..backbones.resnet import ResNet50, ResNet152
 from ..utils.download import prep_weights_gdrive, prep_weights_file
-from .shared.prep import preprocess
-from .shared.bbox import get_priors, decode_boxes, select_boxes
+from .operations import prep, bbox
 
 # Source 1: https://github.com/biubug6/Pytorch_Retinaface
 # Source 2: https://github.com/barisbatuhan/FaceDetector
@@ -124,25 +123,16 @@ class Head(nn.Module):
         return x
 
 
-class Head2(nn.Module):
+class HeadShared(nn.Module):
 
     def __init__(self, c, num_anchors, task_len):
         super().__init__()
         self.task_len = task_len
-        self.conv = nn.ModuleList([ConvUnit(c, c, 3, 1, 1, relu_type='plain', bn=None) for _ in range(4)])
+        self.conv = nn.Sequential(*[ConvUnit(c, c, 3, 1, 1, relu_type='plain', bn=None) for _ in range(4)])
         self.final = nn.Conv2d(c, num_anchors * task_len, kernel_size=3, padding=1)
     
     def forward(self, x):
         x = self.final(self.conv(x)).permute(0, 2, 3, 1)
-        #N, _, H, W = cls_logits.shape
-        #cls_logits = cls_logits.view(N, -1, self.num_classes, H, W)
-        #cls_logits = cls_logits.permute(0, 3, 4, 1, 2)
-        #cls_logits = cls_logits.reshape(N, -1, self.num_classes)  # Size=(N, HWA, 4)
-
-        #N, _, H, W = bbox_regression.shape
-        #bbox_regression = bbox_regression.view(N, -1, 4, H, W)
-        #bbox_regression = bbox_regression.permute(0, 3, 4, 1, 2)
-        #bbox_regression = bbox_regression.reshape(N, -1, 4)  # Size=(N, HWA, 4)
         x = x.reshape(x.shape[0], -1, self.task_len)
         return x
     
@@ -152,7 +142,10 @@ class RetinaFace(nn.Module):
     def __init__(self, backbone, cins, cout, relu, bn, P6, smoothP5, smoothBefore, nonCumulative,
                  to0_1, swapRB, mean, std, bases, score_thr, predict_landmarks):
         super().__init__()
-        self.norm_params = (to0_1, swapRB, mean, std)
+        self.to0_1 = to0_1
+        self.toRGB = swapRB
+        self.means = mean
+        self.stds = std
         self.bases = bases
         self.score_thr = score_thr
         num_anchors = len(bases[0][1])
@@ -166,9 +159,10 @@ class RetinaFace(nn.Module):
         if predict_landmarks:
             self.heads_ldmks = nn.ModuleList([Head(cout, num_anchors, 10) for _ in range(num_levels)])
 
-    def forward(self, imgs, allow_var_sizes):
+    def forward(self, imgs):
         dv = next(self.parameters()).device
-        x, _ = preprocess(imgs, dv, self.norm_params, allow_var_sizes)
+        #x, _ = prep.preprocess(imgs, dv, self.norm_params)
+        x = torch.stack(prep.normalize(imgs, dv, self.means, self.stds, self.to0_1, self.toRGB))
         xs = self.body(x)
         xs = self.feature_pyramid(xs)
         xs = [self.context_modules[i](xs[i]) for i in range(len(xs))]
@@ -178,9 +172,9 @@ class RetinaFace(nn.Module):
             ldm_reg = torch.cat([self.heads_ldmks[i](xs[i]) for i in range(len(xs))], dim=1)
      
         scores = F.softmax(classif, dim=-1)[:, :, 1]
-        priors = get_priors(x.shape[2:], self.bases).to(x.device)
-        boxes = decode_boxes(box_reg, priors)
-        l = select_boxes(boxes, scores, score_thr=self.score_thr, iou_thr=0.4, impl='tvis')
+        priors = bbox.get_priors(x.shape[2:], self.bases).to(x.device)
+        boxes = bbox.decode_boxes(box_reg, priors)
+        l = bbox.select_boxes(boxes, scores, score_thr=self.score_thr, iou_thr=0.4, impl='tvis')
         return l
 
 
@@ -189,10 +183,13 @@ class RetinaNet(nn.Module):
     def __init__(self):
         super(RetinaNet, self).__init__()
         backbone = ResNet50(return_count=3, bn_eps=0.0)
-        cins, cout = [512, 1024, 2048], 256
-        relu, bn = None, None
-        P6, P7, smoothP5 = 'fromP5', True, True
-        self.norm_params = (True, True, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        cins = [512, 1024, 2048]
+        cout = 256
+
+        self.body = backbone
+        self.feature_pyramid = FPN(cins, cout, relu=None, bn=None, P6='fromP5', P7=True, smoothP5=True)
+        self.cls_head = HeadShared(cout, 9, 91)
+        self.reg_head = HeadShared(cout, 9, 4)
 
         bases = [
                 (8,   [(45, 23), (57, 28), (71, 35),          (32, 32), (40, 40), (50, 50),          (23, 45), (28, 57), (35, 71)]),
@@ -205,18 +202,24 @@ class RetinaNet(nn.Module):
         #aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
         #areas = (32, 40, 50), (64, 80, 101), (128, 161, 203), (256, 322, 406), (512, 645, 812)
         #ratios = (0.5, 1.0, 2.0)
-
-        self.body = backbone
-        self.feature_pyramid = FPN(cins, cout, relu, bn, P6, P7, smoothP5)
-        self.cls_head = Head2(cout, 9, 91)
-        self.reg_head = Head2(cout, 9, 4)
     
-    def forward(self, imgs, allow_var_sizes):
+    def forward(self, imgs):
         dv = next(self.parameters()).device
-        x, sb = preprocess(imgs, dv, self.norm_params, allow_var_sizes)
+        ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
+        ts, sb = prep.resize(ts, resize_min=800, resize_max=1333)
+        x = prep.batch(ts, mult=32)
+
         xs = self.body(x)
         xs = self.feature_pyramid(xs)
-        return xs
+        box_reg = torch.cat([self.reg_head(fmap) for fmap in xs], dim=1)
+        cls_log = torch.cat([self.cls_head(fmap) for fmap in xs], dim=1)
+        
+        #scores = F.softmax(classif, dim=-1)[:, :, 1]
+        #priors = bbox.get_priors(x.shape[2:], self.bases).to(x.device)
+        #boxes = bbox.decode_boxes(box_reg, priors)
+        #l = bbox.select_boxes(boxes, scores, score_thr=0.05, iou_thr=0.5, impl='tvis')
+
+        return box_reg, cls_log
 
 
 class RetinaNetDetector():
@@ -241,9 +244,9 @@ class RetinaNetDetector():
         self.model.load_state_dict(wd_dst)
         self.model.eval()
 
-    def __call__(self, imgs, allow_var_sizes=False):
+    def __call__(self, imgs):
         with torch.no_grad():
-            res = self.model(imgs, allow_var_sizes)
+            res = self.model(imgs)
         return res
 
 
@@ -329,7 +332,7 @@ class RetinaFaceDetector():
         self.model.load_state_dict(wd_dst)
         self.model.eval()
 
-    def __call__(self, imgs, allow_var_sizes=False):
+    def __call__(self, imgs):
         with torch.no_grad():
-            res = self.model(imgs, allow_var_sizes)
+            res = self.model(imgs)
         return res
