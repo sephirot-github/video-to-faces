@@ -34,7 +34,7 @@ def resize(ts, resize_min, resize_max):
         sz_orig.append(sz)
         sz_used.append(ts[i].shape[1:3])
     scales = torch.tensor(sz_used) / torch.tensor(sz_orig)
-    return ts, scales
+    return ts, scales, sz_used
 
 
 def batch(ts, mult):

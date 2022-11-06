@@ -10,7 +10,7 @@ from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV1
 from ..backbones.resnet import ResNet50, ResNet152
 from ..utils.download import prep_weights_gdrive, prep_weights_file
-from .operations import prep, bbox
+from .operations import prep, post
 
 # Source 1: https://github.com/biubug6/Pytorch_Retinaface
 # Source 2: https://github.com/barisbatuhan/FaceDetector
@@ -161,7 +161,6 @@ class RetinaFace(nn.Module):
 
     def forward(self, imgs):
         dv = next(self.parameters()).device
-        #x, _ = prep.preprocess(imgs, dv, self.norm_params)
         x = torch.stack(prep.normalize(imgs, dv, self.means, self.stds, self.to0_1, self.toRGB))
         xs = self.body(x)
         xs = self.feature_pyramid(xs)
@@ -172,9 +171,9 @@ class RetinaFace(nn.Module):
             ldm_reg = torch.cat([self.heads_ldmks[i](xs[i]) for i in range(len(xs))], dim=1)
      
         scores = F.softmax(classif, dim=-1)[:, :, 1]
-        priors = bbox.get_priors(x.shape[2:], self.bases).to(x.device)
-        boxes = bbox.decode_boxes(box_reg, priors)
-        l = bbox.select_boxes(boxes, scores, score_thr=self.score_thr, iou_thr=0.4, impl='tvis')
+        priors = post.get_priors(x.shape[2:], self.bases, dv, loc='center')
+        boxes = post.decode_boxes(box_reg, priors, mult_xy=0.1, mult_wh=0.2)
+        l = post.select_boxes(boxes, scores, score_thr=self.score_thr, iou_thr=0.4, impl='tvis')
         return l
 
 
@@ -185,19 +184,17 @@ class RetinaNet(nn.Module):
         backbone = ResNet50(return_count=3, bn_eps=0.0)
         cins = [512, 1024, 2048]
         cout = 256
-
+        self.bases = [
+            (8,   [(46, 22), (56, 28), (70, 36),          (32, 32), (40, 40), (50, 50),          (22, 46), (28, 56), (36, 70)]),
+            (16,  [(90, 46), (114, 56), (142, 72),        (64, 64), (80, 80), (100, 100),        (46, 90), (56, 114), (72, 142)]),
+            (32,  [(182, 90), (228, 114), (288, 144),     (128, 128), (160, 160), (204, 204),    (90, 182), (114, 228), (144, 288)]),
+            (64,  [(362, 182), (456, 228), (574, 288),    (256, 256), (322, 322), (406, 406),    (182, 362), (228, 456), (288, 574)]),
+            (128, [(724, 362), (912, 456), (1148, 574),   (512, 512), (644, 644), (812, 812),    (362, 724), (456, 912), (574, 1148)])
+        ]
         self.body = backbone
         self.feature_pyramid = FPN(cins, cout, relu=None, bn=None, P6='fromP5', P7=True, smoothP5=True)
         self.cls_head = HeadShared(cout, 9, 91)
         self.reg_head = HeadShared(cout, 9, 4)
-
-        bases = [
-                (8,   [(45, 23), (57, 28), (71, 35),          (32, 32), (40, 40), (50, 50),          (23, 45), (28, 57), (35, 71)]),
-                (16,  [(91, 45), (113, 57), (143, 71),        (64, 64), (80, 80), (101, 101),        (45, 91), (57, 113), (71, 143)]),
-                (32,  [(181, 91), (228, 114), (287, 144),     (128, 128), (161, 161), (203, 203),    (91, 181), (114, 228), (144, 287)]),
-                (64,  [(362, 181), (455, 228), (574, 287),    (256, 256), (322, 322), (406, 406),    (181, 362), (228, 455), (287, 574)]),
-                (128, [(724, 362), (912, 456), (1148, 574),   (512, 512), (645, 645), (812, 812),    (362, 724), (456, 912), (574, 1148)])
-            ]
         #anchor_sizes = tuple((x, int(x * 2 ** (1.0 / 3)), int(x * 2 ** (2.0 / 3))) for x in [32, 64, 128, 256, 512])
         #aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
         #areas = (32, 40, 50), (64, 80, 101), (128, 161, 203), (256, 322, 406), (512, 645, 812)
@@ -206,20 +203,20 @@ class RetinaNet(nn.Module):
     def forward(self, imgs):
         dv = next(self.parameters()).device
         ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
-        ts, sb = prep.resize(ts, resize_min=800, resize_max=1333)
+        ts, scl, sz = prep.resize(ts, resize_min=800, resize_max=1333)
         x = prep.batch(ts, mult=32)
 
         xs = self.body(x)
         xs = self.feature_pyramid(xs)
-        box_reg = torch.cat([self.reg_head(fmap) for fmap in xs], dim=1)
-        cls_log = torch.cat([self.cls_head(fmap) for fmap in xs], dim=1)
-        
-        #scores = F.softmax(classif, dim=-1)[:, :, 1]
-        #priors = bbox.get_priors(x.shape[2:], self.bases).to(x.device)
-        #boxes = bbox.decode_boxes(box_reg, priors)
-        #l = bbox.select_boxes(boxes, scores, score_thr=0.05, iou_thr=0.5, impl='tvis')
+        reg = [self.reg_head(fmap) for fmap in xs]
+        log = [self.cls_head(fmap) for fmap in xs]
 
-        return box_reg, cls_log
+        priors = post.get_priors(x.shape[2:], self.bases, dv, loc='corner')
+        b, s, l, fuck1, fuck2, fuck3 = post.select_decode(reg, log, priors, sz, 0.05, 0.5, topk_map=1000, topk_img=300)
+        for i in range(x.shape[0]):
+            b[i][:, 0::2] /= scl[i][1]
+            b[i][:, 1::2] /= scl[i][0]
+        return b, s, l
 
 
 class RetinaNetDetector():
