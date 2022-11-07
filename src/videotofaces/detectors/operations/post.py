@@ -33,40 +33,45 @@ def nms(boxes, scores, thresh):
     return keep
 
 
-def select_decode(reg_maps, cls_maps, priors, sz, score_thr, nms_thr, topk_map=99999, topk_img=99999):
+def select_decode(reg_maps, cls_maps, priors, sz, score_thr, nms_thr, topk_map=None, topk_img=None):
     """
     """
     bs = cls_maps[0].shape[0]
     num_classes = cls_maps[0].shape[-1]
     reg = torch.cat(reg_maps, dim=1)
+    cls = torch.cat(cls_maps, dim=1)
     rb, rs, rl = [], [], []
 
     for i in range(bs):
         
-        scores, labels, sel, shift = [], [], [], 0
-        for j in range(len(cls_maps)): 
-            scr = torch.sigmoid(cls_maps[j][i]).flatten()
-            idx = torch.nonzero(scr > score_thr).squeeze()
-            scr, top = torch.topk(scr[idx], min(topk_map, idx.shape[0]))
-            idx = idx[top]
-            scores.append(scr)
-            labels.append(idx % num_classes)
-            aidx = torch.div(idx, num_classes, rounding_mode='floor') + shift
-            sel.append(aidx)
-            shift += cls_maps[j].shape[1]
-        scores, labels, sel = [torch.cat(a) for a in [scores, labels, sel]]
+        s = torch.sigmoid(cls[i]).flatten()
+        idx = torch.nonzero(s > score_thr).squeeze()
+
+        if topk_map:
+            map_borders = np.cumsum([0] + [m.shape[1] for m in reg_maps]) * num_classes
+            sel = []
+            for u in range(1, len(map_borders)):
+                midx = idx[(idx >= map_borders[u - 1]) * (idx < map_borders[u])]
+                _, top = torch.topk(s[midx], min(topk_map, midx.shape[0]))
+                sel.append(midx[top])
+            idx = torch.cat(sel)
+
+        scores = s[idx]
+        labels = idx % num_classes
+        sel = torch.div(idx, num_classes, rounding_mode='floor')
 
         boxes = decode_boxes(reg[i][sel], priors[sel], 1, 1, math.log(1000 / 16))
         boxes[:, 0::2] = torch.clamp(boxes[:, 0::2], max=sz[i][1])
         boxes[:, 1::2] = torch.clamp(boxes[:, 1::2], max=sz[i][0])
-        trace = torch.hstack([reg[i][sel], priors[sel], boxes])
 
         keep = torchvision.ops.batched_nms(boxes, scores, labels, nms_thr)
-        keep = keep[:topk_img]
+        if topk_img:
+            keep = keep[:topk_img]
+        
         rb.append(boxes[keep])
         rs.append(scores[keep])
         rl.append(labels[keep])
-    return rb, rs, rl, trace
+    return rb, rs, rl
     
 
 def select_boxes(boxes, scores, score_thr, iou_thr, impl):
@@ -98,7 +103,7 @@ def select_boxes(boxes, scores, score_thr, iou_thr, impl):
         return l
 
 
-def get_priors(img_size, bases, dv, loc):
+def get_priors(img_size, bases, dv='cpu', loc='center', patches='as_is'):
     """For every (stride, anchors) pair in ``bases`` list, walk through every stride-sized
     square patch of ``img_size`` canvas left-right, top-bottom and return anchors-sized boxes
     drawn around each patch's center in a form of (center_x, center_y, width, height).
@@ -111,8 +116,16 @@ def get_priors(img_size, bases, dv, loc):
 
     In case of square anchors, only one dimension can be provided, i.e. [(8, [16, 32])]
     will be automatically turned into [(8, [(16, 16), (32, 32)])].
+
+    If loc='corner', then boxes are drawn around patches' top-left corners instead of centers.
+
+    If patches='fit', then stride is adjusted so that patches fit the canvas without 'going over'.
+    E.g. for canvas (h=800, w=1216) and stride 32, ``patches`` param will have no effect (since
+    such canvas can be divided into 32x32 areas perfectly), but for stride 128, patches will
+    change from 128x128 to 114x121 if the param = 'fit'.
     """
     assert loc in ['center', 'corner']
+    assert patches in ['as_is', 'fit']
     p = []
     h, w = img_size
     if isinstance(bases[0][1][0], int):
@@ -120,11 +133,13 @@ def get_priors(img_size, bases, dv, loc):
     for stride, anchors in bases:
         nx = math.ceil(w / stride)
         ny = math.ceil(h / stride)
-        xs = torch.arange(nx, device=dv) * stride
-        ys = torch.arange(ny, device=dv) * stride
+        step_x = stride if patches == 'as_is' else w // nx
+        step_y = stride if patches == 'as_is' else h // ny
+        xs = torch.arange(nx, device=dv) * step_x
+        ys = torch.arange(ny, device=dv) * step_y
         if loc == 'center':
-            xs += stride // 2
-            ys += stride // 2
+            xs += step_x // 2
+            ys += step_y // 2
         c = torch.dstack(torch.meshgrid(xs, ys, indexing='xy')).reshape(-1, 2)
         # could replace line above by "torch.cartesian_prod(xs, ys)" but that'd be for indexing='ij'
         c = c.repeat_interleave(len(anchors), dim=0)
