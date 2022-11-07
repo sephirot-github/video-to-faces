@@ -212,11 +212,11 @@ class RetinaNet(nn.Module):
         log = [self.cls_head(fmap) for fmap in xs]
 
         priors = post.get_priors(x.shape[2:], self.bases, dv, loc='corner')
-        b, s, l, fuck1, fuck2, fuck3 = post.select_decode(reg, log, priors, sz, 0.05, 0.5, topk_map=1000, topk_img=300)
+        b, s, l, trace = post.select_decode(reg, log, priors, sz, 0.05, 0.5, topk_map=1000, topk_img=300)
         for i in range(x.shape[0]):
             b[i][:, 0::2] /= scl[i][1]
             b[i][:, 1::2] /= scl[i][0]
-        return b, s, l
+        return b, s, l, trace
 
 
 class RetinaNetDetector():

@@ -59,13 +59,14 @@ def select_decode(reg_maps, cls_maps, priors, sz, score_thr, nms_thr, topk_map=9
         boxes = decode_boxes(reg[i][sel], priors[sel], 1, 1, math.log(1000 / 16))
         boxes[:, 0::2] = torch.clamp(boxes[:, 0::2], max=sz[i][1])
         boxes[:, 1::2] = torch.clamp(boxes[:, 1::2], max=sz[i][0])
+        trace = torch.hstack([reg[i][sel], priors[sel], boxes])
 
         keep = torchvision.ops.batched_nms(boxes, scores, labels, nms_thr)
         keep = keep[:topk_img]
         rb.append(boxes[keep])
         rs.append(scores[keep])
         rl.append(labels[keep])
-    return rb, rs, rl
+    return rb, rs, rl, trace
     
 
 def select_boxes(boxes, scores, score_thr, iou_thr, impl):
