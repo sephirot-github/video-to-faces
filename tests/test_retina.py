@@ -4,13 +4,13 @@ import unittest
 import cv2
 import numpy as np
 
-from videotofaces.detectors.retina import RetinaFaceDetector, RetinaNetDetector
+from videotofaces.detectors.retina import RetinaFaceDetector, RetinaDetector
 
 
 class TestRetina(unittest.TestCase):
 
     def test_retinanet_torchvision(self):
-        model = RetinaNetDetector()
+        model = RetinaDetector('net_torchvision_resnet50_coco')
         testdir = osp.dirname(osp.realpath(__file__))
         im1 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_000139.jpg'))
         im2 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_455157.jpg'))
@@ -38,7 +38,7 @@ class TestRetina(unittest.TestCase):
     # irl_det_4 = "17_Ceremony_Ceremony_17_171.jpg"
 
     def test_mobilenet(self):
-        model = RetinaFaceDetector('biubug6_mobilenet')
+        model = RetinaDetector('face_biubug6_mobilenet')
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [1, 2, 3, 4]]
         rb = model(imgs)
@@ -74,8 +74,8 @@ class TestRetina(unittest.TestCase):
         rb = model(imgs)
         self.assertEqual(rb[0].shape, (43, 5))
         self.assertEqual(rb[1].shape, (27, 5)) 
-        np.testing.assert_almost_equal(rb[0][2], np.array([162.3630, 301.0547, 217.6370, 372.3162, 0.9209]), decimal=4)
-        np.testing.assert_almost_equal(rb[1][6], np.array([398.3187, 309.1938, 479.2593, 406.1411, 0.8273]), decimal=4)
+        np.testing.assert_almost_equal(rb[0][2], np.array([162.3646, 301.0576, 217.6351, 372.3147, 0.9209]), decimal=4)
+        np.testing.assert_almost_equal(rb[1][6], np.array([398.3162, 309.1897, 479.2617, 406.1430, 0.8273]), decimal=4)
 
     def test_resnet152(self):
         model = RetinaFaceDetector('bbt_resnet152_mixed')
@@ -84,8 +84,8 @@ class TestRetina(unittest.TestCase):
         rb = model(imgs)
         self.assertEqual(rb[0].shape, (43, 5))
         self.assertEqual(rb[1].shape, (26, 5))
-        np.testing.assert_almost_equal(rb[0][1], np.array([46.0378, 243.8717, 103.3133, 305.6753, 0.9241]), decimal=4)
-        np.testing.assert_almost_equal(rb[1][4], np.array([24.19395, 221.45657, 83.07513, 294.79721, 0.85426]), decimal=5)
+        np.testing.assert_almost_equal(rb[0][1], np.array([46.0401, 243.8737, 103.3121, 305.6734, 0.9241]), decimal=4)
+        np.testing.assert_almost_equal(rb[1][4], np.array([24.19569, 221.45947, 83.07320, 294.79553, 0.85426]), decimal=5)
 
 
 if __name__ == '__main__':

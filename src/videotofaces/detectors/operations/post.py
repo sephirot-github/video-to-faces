@@ -103,9 +103,17 @@ def select_boxes(boxes, scores, score_thr, iou_thr, impl):
         return l
 
 
-def make_anchors(square_sizes, aspect_ratios):
-    mult = [math.sqrt(ar) for ar in aspect_ratios]
-    anchors = [[(sz / m, sz * m) for m in mult for sz in grp] for grp in square_sizes]
+def make_anchors(dims, scales=[1], ratios=[1]):
+    """For every possible combination (D, S, R) of dims, scales and ratios,
+    makes a box with area = D*D*S*S and aspect ratio = R,
+    returning len(dims) lists, each with len(scales) * len(ratios) tuples.
+
+    Example: make_anchors([16, 32], scales=[1, 0.5, 0.1], ratios=[1, 2])
+    Output: [[(16, 16), (8, 8), (1.6, 1.6), (22.63, 11.31), (11.31, 5.66), (2.26, 1.13)],
+             [(32, 32), (16, 16), (3.2, 3.2), (45.25, 22.63), (22.63, 11.31), (4.53, 2.26)]]
+    """
+    mult = [math.sqrt(ar) for ar in ratios]
+    anchors = [[(d * s * m, d * s / m) for m in mult for s in scales] for d in dims]
     return anchors
 
 

@@ -177,28 +177,79 @@ class RetinaFace(nn.Module):
         return l
 
 
-class RetinaNet(nn.Module):
+class RetinaFace_Biubug6(nn.Module):
+
+    def __init__(self, mobilenet=True):
+        super().__init__()
+        if mobilenet:
+            backbone = MobileNetV1(0.25, relu_type='lrelu_0.1', return_inter=[5, 11])
+            cins, cout, relu = [64, 128, 256], 64, 'lrelu_0.1'
+        else:
+            backbone = ResNet50(return_count=3)
+            cins, cout, relu = [512, 1024, 2048], 256, 'plain'
+
+        bases = [
+            (8, [16, 32]),
+            (16, [64, 128]),
+            (32, [256, 512])
+        ]
+        num_anchors = 2
+
+        self.body = backbone
+        self.feature_pyramid = FPN(cins, cout, relu, smoothBefore=True)
+        self.context_modules = nn.ModuleList([SSH(cout, cout, relu) for _ in range(len(cins))])
+        self.heads_class = nn.ModuleList([Head(cout, num_anchors, 2) for _ in range(len(cins))])
+        self.heads_boxes = nn.ModuleList([Head(cout, num_anchors, 4) for _ in range(len(cins))])
+        self.heads_ldmks = nn.ModuleList([Head(cout, num_anchors, 10) for _ in range(len(cins))])
+
+    def forward(self, imgs):
+        dv = next(self.parameters()).device
+        ts = prep.normalize(imgs, dv, [104, 117, 123], stds=None, to0_1=False, toRGB=False)
+        x = torch.stack(ts)
+
+        xs = self.body(x)
+        xs = self.feature_pyramid(xs)
+        xs = [self.context_modules[i](xs[i]) for i in range(len(xs))]
+        box_reg = torch.cat([self.heads_boxes[i](xs[i]) for i in range(len(xs))], dim=1)
+        classif = torch.cat([self.heads_class[i](xs[i]) for i in range(len(xs))], dim=1)
+        #ldm_reg = torch.cat([self.heads_ldmks[i](xs[i]) for i in range(len(xs))], dim=1)
+     
+        scores = F.softmax(classif, dim=-1)[:, :, 1]
+        priors = post.get_priors(x.shape[2:], self.bases, dv, loc='center')
+        boxes = post.decode_boxes(box_reg, priors, 0.1, 0.2)
+        l = post.select_boxes(boxes, scores, score_thr=0.02, iou_thr=0.4, impl='tvis')
+        return l
+
+    def get_pretrained_weights(self, dv, source):
+        if source.endswith('mobilenet'):
+            gid = '15zP8BP-5IvWXWZoYTNdvUJUiBqZ1hxu1'
+        else:
+            gid = '14KX6VqF69MdSPk3Tr9PlDYbq7ArpdNUW'
+        nm = 'retina_%s.pth' % source
+        wf = prep_weights_gdrive(gid, nm)
+        wd_src = torch.load(wf, map_location=torch.device(dv))
+        wd_dst = {}
+        names = list(wd_src)
+        for i, w in enumerate(list(self.model.state_dict())):
+            #print(names[i], ' to ', w)
+            wd_dst[w] = wd_src[names[i]]
+        return wd_dst
+
+
+class RetinaNet_TorchVision(nn.Module):
 
     def __init__(self):
-        super(RetinaNet, self).__init__()
+        super().__init__()
         backbone = ResNet50(return_count=3, bn_eps=0.0)
         cins = [512, 1024, 2048]
         cout = 256
-        self.bases = [
-            (8,   [(46, 22), (56, 28), (70, 36),          (32, 32), (40, 40), (50, 50),          (22, 46), (28, 56), (36, 70)]),
-            (16,  [(90, 46), (114, 56), (142, 72),        (64, 64), (80, 80), (100, 100),        (46, 90), (56, 114), (72, 142)]),
-            (32,  [(182, 90), (228, 114), (288, 144),     (128, 128), (160, 160), (204, 204),    (90, 182), (114, 228), (144, 288)]),
-            (64,  [(362, 182), (456, 228), (574, 288),    (256, 256), (322, 322), (406, 406),    (182, 362), (228, 456), (288, 574)]),
-            (128, [(724, 362), (912, 456), (1148, 574),   (512, 512), (644, 644), (812, 812),    (362, 724), (456, 912), (574, 1148)])
-        ]
+        num_anchors = 9
+        self.num_classes = 91
+
         self.body = backbone
         self.feature_pyramid = FPN(cins, cout, relu=None, bn=None, P6='fromP5', P7=True, smoothP5=True)
-        self.cls_head = HeadShared(cout, 9, 91)
-        self.reg_head = HeadShared(cout, 9, 4)
-        #anchor_sizes = tuple((x, int(x * 2 ** (1.0 / 3)), int(x * 2 ** (2.0 / 3))) for x in [32, 64, 128, 256, 512])
-        #aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
-        #areas = (32, 40, 50), (64, 80, 101), (128, 161, 203), (256, 322, 406), (512, 645, 812)
-        #ratios = (0.5, 1.0, 2.0)
+        self.cls_head = HeadShared(cout, num_anchors, self.num_classes)
+        self.reg_head = HeadShared(cout, num_anchors, 4)
     
     def forward(self, imgs):
         dv = next(self.parameters()).device
@@ -211,34 +262,75 @@ class RetinaNet(nn.Module):
         reg = [self.reg_head(fmap) for fmap in xs]
         log = [self.cls_head(fmap) for fmap in xs]
 
-        priors = post.get_priors(x.shape[2:], self.bases, dv, loc='corner', patches='fit')
+        priors = post.get_priors(x.shape[2:], self.get_bases(), dv, loc='corner', patches='fit')
         b, s, l = post.select_decode(reg, log, priors, sz, 0.05, 0.5, topk_map=1000, topk_img=300)
         for i in range(x.shape[0]):
             b[i][:, 0::2] /= scl[i][1]
             b[i][:, 1::2] /= scl[i][0]
         return b, s, l
 
+    def get_bases(self):
+        # equivalent to:
+        #strides = [8, 16, 32, 64, 128]
+        #anchors = post.make_anchors([32, 64, 128, 256, 512], [1, 2**(1/3), 2**(2/3)], [2, 1, 0.5])
+        #return list(zip(strides, anchors))
+        # but due to some rounding of intermediate results, torchvision's code ends up with sligthly different numbers
+        return [
+            (8,   [(46, 22), (56, 28), (70, 36),        (32, 32), (40, 40), (50, 50),       (22, 46), (28, 56), (36, 70)]),
+            (16,  [(90, 46), (114, 56), (142, 72),      (64, 64), (80, 80), (100, 100),     (46, 90), (56, 114), (72, 142)]),
+            (32,  [(182, 90), (228, 114), (288, 144),   (128, 128), (160, 160), (204, 204), (90, 182), (114, 228), (144, 288)]),
+            (64,  [(362, 182), (456, 228), (574, 288),  (256, 256), (322, 322), (406, 406), (182, 362), (228, 456), (288, 574)]),
+            (128, [(724, 362), (912, 456), (1148, 574), (512, 512), (644, 644), (812, 812), (362, 724), (456, 912), (574, 1148)])
+        ]
 
-class RetinaNetDetector():
-    def __init__(self, device=None):
-        if not device:
-            device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        wf = prep_weights_file('https://download.pytorch.org/models/retinanet_resnet50_fpn_coco-eeacb38b.pth', 'retinanet_torchvision_resnet50_coco.pth')
-        wd_src = torch.load(wf, map_location=torch.device(device))
-    
-        self.model = RetinaNet().to(device)
-        #for w in self.model.state_dict(): print(w, '\t', self.model.state_dict()[w].shape)
+    def get_pretrained_weights(self, dv, source):
+        link = 'https://download.pytorch.org/models/retinanet_resnet50_fpn_coco-eeacb38b.pth'
+        nm = 'retina_%s.pth' % source
+        wf = prep_weights_file(link, nm)
+        wd_src = torch.load(wf, map_location=torch.device(dv))
+        
+        # source file doesn't have 'num_batches_tracked' entries, but they're used only in
+        # train mode and only if BatchNorm2d 'momentum' param = None, so we just fill them with 0
         wd_dst = {}
         names = list(wd_src)
         shift = 0
-        for i, w in enumerate(list(self.model.state_dict())):
+        for i, w in enumerate(list(self.state_dict())):
             if w.endswith('num_batches_tracked'):
                 wd_dst[w] = torch.tensor(0)
                 shift += 1
             else:
-                #print(names[i], ' to ', w)
                 wd_dst[w] = wd_src[names[i - shift]]
-        self.model.load_state_dict(wd_dst)
+        return wd_dst
+
+
+class RetinaDetector():
+
+    variations = [
+        'net_torchvision_resnet50_coco',
+        'face_biubug6_mobilenet', 'face_biubug6_resnet50',
+        'face_bbt_resnet152_mixed', 'face_bbt_resnet50_mixed',
+        'face_bbt_resnet50_wider', 'face_bbt_resnet50_icartoon'
+    ]
+
+    def __init__(self, source, device=None):
+        assert source in self.variations
+        if not device:
+            device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        print('Initializing Retina model (%s) for detection' % source)
+
+        if source == 'net_torchvision_resnet50_coco':
+            self.model = RetinaNet_TorchVision()
+
+        elif source.starswith('face_biubug6'):
+            self.model = RetinaFace_Biubug6(source.endswith('mobilenet'))
+ 
+        #elif 'bbt_resnet50' in source:
+        #    self.model = RetinaFace_BBT('resnet50' in source)
+        
+        #for w in self.model.state_dict(): print(w, '\t', self.model.state_dict()[w].shape)
+        wd = self.model.get_pretrained_weights(device, source)
+        self.model = self.model.to(device)
+        self.model.load_state_dict(wd)
         self.model.eval()
 
     def __call__(self, imgs):
@@ -289,13 +381,15 @@ class RetinaFaceDetector():
 
         elif source.startswith('bbt_'):
             bases = [
-                # scales: x, x * 2 ** (1.0 / 3), x * 2 ** (2.0 / 3)
                 (4, [16, 20.16, 25.40]),
                 (8, [32, 40.32, 50.80]),
                 (16, [64, 80.63, 101.59]),
                 (32, [128, 161.26, 203.19]),
                 (64, [256, 322.54, 406.37])
             ]
+            anchors = post.make_anchors([16, 32, 64, 128, 256], scales=[1, 2**(1/3), 2**(2/3)])
+            bases = list(zip([4, 8, 16, 32, 64], anchors))
+
             score_thr, predict_landmarks = 0.5, False
             #to0_1, swapRB, mean, std = False, True, (123.675, 116.28, 103.53), (58.395, 57.12, 57.375)
             to0_1, swapRB, mean, std = True, True, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
