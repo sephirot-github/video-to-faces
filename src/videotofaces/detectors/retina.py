@@ -137,46 +137,6 @@ class HeadShared(nn.Module):
         return x
     
 
-class RetinaFace(nn.Module):
-
-    def __init__(self, backbone, cins, cout, relu, bn, P6, smoothP5, smoothBefore, nonCumulative,
-                 to0_1, swapRB, mean, std, bases, score_thr, predict_landmarks):
-        super().__init__()
-        self.to0_1 = to0_1
-        self.toRGB = swapRB
-        self.means = mean
-        self.stds = std
-        self.bases = bases
-        self.score_thr = score_thr
-        num_anchors = len(bases[0][1])
-        num_levels = len(cins) + (1 if P6 else 0)
-
-        self.body = backbone
-        self.feature_pyramid = FPN(cins, cout, relu, 1e-05, P6, None, smoothP5, smoothBefore, nonCumulative)
-        self.context_modules = nn.ModuleList([SSH(cout, cout, relu) for _ in range(num_levels)])
-        self.heads_class = nn.ModuleList([Head(cout, num_anchors, 2) for _ in range(num_levels)])
-        self.heads_boxes = nn.ModuleList([Head(cout, num_anchors, 4) for _ in range(num_levels)])
-        if predict_landmarks:
-            self.heads_ldmks = nn.ModuleList([Head(cout, num_anchors, 10) for _ in range(num_levels)])
-
-    def forward(self, imgs):
-        dv = next(self.parameters()).device
-        x = torch.stack(prep.normalize(imgs, dv, self.means, self.stds, self.to0_1, self.toRGB))
-        xs = self.body(x)
-        xs = self.feature_pyramid(xs)
-        xs = [self.context_modules[i](xs[i]) for i in range(len(xs))]
-        box_reg = torch.cat([self.heads_boxes[i](xs[i]) for i in range(len(xs))], dim=1)
-        classif = torch.cat([self.heads_class[i](xs[i]) for i in range(len(xs))], dim=1)
-        if hasattr(self, 'heads_ldmks'):
-            ldm_reg = torch.cat([self.heads_ldmks[i](xs[i]) for i in range(len(xs))], dim=1)
-     
-        scores = F.softmax(classif, dim=-1)[:, :, 1]
-        priors = post.get_priors(x.shape[2:], self.bases, dv, loc='center')
-        boxes = post.decode_boxes(box_reg, priors, mult_xy=0.1, mult_wh=0.2)
-        l = post.select_boxes(boxes, scores, score_thr=self.score_thr, iou_thr=0.4, impl='tvis')
-        return l
-
-
 class RetinaFace_Biubug6(nn.Module):
 
     def __init__(self, mobilenet=True):
@@ -188,15 +148,16 @@ class RetinaFace_Biubug6(nn.Module):
             backbone = ResNet50(return_count=3)
             cins, cout, relu = [512, 1024, 2048], 256, 'plain'
 
-        bases = [
+        self.bases = [
             (8, [16, 32]),
             (16, [64, 128]),
             (32, [256, 512])
         ]
+        self.bases = list(zip([8, 16, 32], post.make_anchors([16, 64, 256], scales=[1, 2])))
         num_anchors = 2
 
         self.body = backbone
-        self.feature_pyramid = FPN(cins, cout, relu, smoothBefore=True)
+        self.feature_pyramid = FPN(cins, cout, relu, smoothBeforeMerge=True)
         self.context_modules = nn.ModuleList([SSH(cout, cout, relu) for _ in range(len(cins))])
         self.heads_class = nn.ModuleList([Head(cout, num_anchors, 2) for _ in range(len(cins))])
         self.heads_boxes = nn.ModuleList([Head(cout, num_anchors, 4) for _ in range(len(cins))])
@@ -213,7 +174,7 @@ class RetinaFace_Biubug6(nn.Module):
         box_reg = torch.cat([self.heads_boxes[i](xs[i]) for i in range(len(xs))], dim=1)
         classif = torch.cat([self.heads_class[i](xs[i]) for i in range(len(xs))], dim=1)
         #ldm_reg = torch.cat([self.heads_ldmks[i](xs[i]) for i in range(len(xs))], dim=1)
-     
+        
         scores = F.softmax(classif, dim=-1)[:, :, 1]
         priors = post.get_priors(x.shape[2:], self.bases, dv, loc='center')
         boxes = post.decode_boxes(box_reg, priors, 0.1, 0.2)
@@ -230,8 +191,74 @@ class RetinaFace_Biubug6(nn.Module):
         wd_src = torch.load(wf, map_location=torch.device(dv))
         wd_dst = {}
         names = list(wd_src)
-        for i, w in enumerate(list(self.model.state_dict())):
+        for i, w in enumerate(list(self.state_dict())):
             #print(names[i], ' to ', w)
+            wd_dst[w] = wd_src[names[i]]
+        return wd_dst
+
+
+class RetinaFace_BBT(nn.Module):
+
+    def __init__(self, resnet50=True):
+        super().__init__()
+        backbone = ResNet50() if resnet50 else ResNet152()
+        cins = [256, 512, 1024, 2048]
+        cout = 256
+        relu='plain'
+
+        anchors = post.make_anchors([16, 32, 64, 128, 256], scales=[1, 2**(1/3), 2**(2/3)])
+        self.bases = list(zip([4, 8, 16, 32, 64], anchors))
+        num_anchors = 3
+
+        self.body = backbone
+        self.feature_pyramid = FPN(cins, cout, relu, P6='fromC5', nonCumulative=True)
+        self.context_modules = nn.ModuleList([SSH(cout, cout, relu) for _ in range(len(cins) + 1)])
+        self.heads_class = nn.ModuleList([Head(cout, num_anchors, 2) for _ in range(len(cins) + 1)])
+        self.heads_boxes = nn.ModuleList([Head(cout, num_anchors, 4) for _ in range(len(cins) + 1)])
+
+    def forward(self, imgs):
+        dv = next(self.parameters()).device
+        ts = prep.normalize(imgs, dv, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        x = torch.stack(ts)
+        
+        xs = self.body(x)
+        xs = self.feature_pyramid(xs)
+        xs = [self.context_modules[i](xs[i]) for i in range(len(xs))]
+        box_reg = torch.cat([self.heads_boxes[i](xs[i]) for i in range(len(xs))], dim=1)
+        classif = torch.cat([self.heads_class[i](xs[i]) for i in range(len(xs))], dim=1)
+             
+        scores = F.softmax(classif, dim=-1)[:, :, 1]
+        priors = post.get_priors(x.shape[2:], self.bases, dv, loc='center')
+        boxes = post.decode_boxes(box_reg, priors, 0.1, 0.2)
+        l = post.select_boxes(boxes, scores, score_thr=0.5, iou_thr=0.4, impl='tvis')
+        return l
+
+    def get_pretrained_weights(self, dv, source):
+        gids = {
+            'face_bbt_resnet152_mixed': '1xB5RO99bVnXLYesnilzaZL2KWz4BsJfM',
+            'face_bbt_resnet50_mixed': '1uraA7ZdCCmos0QSVR6CJgg0aSLtV4q4m',
+            'face_bbt_resnet50_wider': '1pQLydyUUEwpEf06ElR2fw8_x2-P9RImT',
+            'face_bbt_resnet50_icartoon': '12RsVC1QulqsSlsCleMkIYMHsAEwMyCw8'
+        }
+        nm = 'retina_%s.pth' % source
+        wf = prep_weights_gdrive(gids[source], nm)
+        wd_src = torch.load(wf, map_location=torch.device(dv))
+        
+        # in this source, smoothP5 is not applied but the layer is still created for it for no reason
+        for s in ['conv.weight', 'bn.weight', 'bn.bias', 'bn.running_mean', 'bn.running_var', 'bn.num_batches_tracked']:
+            wd_src.pop('fpn.lateral_outs.3.' + s)
+        # in this source, FPN extra P6 layer is placed between laterals and smooths, but we need after
+        wl = list(wd_src.items())
+        idx = [i for i, (n, _) in enumerate(wl) if n.startswith('fpn.lateral_ins.4')]
+        els = [wl.pop(idx[0]) for _ in idx]
+        pos = [i for i, (n, _) in enumerate(wl) if n.startswith('fpn.lateral_outs.')][-1]
+        for el in els[::-1]:
+            wl.insert(pos + 1, el)
+        wd_src = dict(wl)
+
+        wd_dst = {}
+        names = list(wd_src)
+        for i, w in enumerate(list(self.state_dict())):
             wd_dst[w] = wd_src[names[i]]
         return wd_dst
 
@@ -316,111 +343,21 @@ class RetinaDetector():
         assert source in self.variations
         if not device:
             device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        print('Initializing Retina model (%s) for detection' % source)
+        print('Initializing Retina model for detection (%s)' % source)
 
         if source == 'net_torchvision_resnet50_coco':
             self.model = RetinaNet_TorchVision()
 
-        elif source.starswith('face_biubug6'):
+        elif source.startswith('face_biubug6'):
             self.model = RetinaFace_Biubug6(source.endswith('mobilenet'))
  
-        #elif 'bbt_resnet50' in source:
-        #    self.model = RetinaFace_BBT('resnet50' in source)
+        else:
+            self.model = RetinaFace_BBT('resnet50' in source)
         
         #for w in self.model.state_dict(): print(w, '\t', self.model.state_dict()[w].shape)
         wd = self.model.get_pretrained_weights(device, source)
         self.model = self.model.to(device)
         self.model.load_state_dict(wd)
-        self.model.eval()
-
-    def __call__(self, imgs):
-        with torch.no_grad():
-            res = self.model(imgs)
-        return res
-
-
-class RetinaFaceDetector():
-
-    gids = {
-        'biubug6_mobilenet': '15zP8BP-5IvWXWZoYTNdvUJUiBqZ1hxu1',
-        'biubug6_resnet50': '14KX6VqF69MdSPk3Tr9PlDYbq7ArpdNUW',
-        'bbt_resnet152_mixed': '1xB5RO99bVnXLYesnilzaZL2KWz4BsJfM',
-        'bbt_resnet50_mixed': '1uraA7ZdCCmos0QSVR6CJgg0aSLtV4q4m',
-        'bbt_resnet50_wider': '1pQLydyUUEwpEf06ElR2fw8_x2-P9RImT',
-        'bbt_resnet50_icartoon': '12RsVC1QulqsSlsCleMkIYMHsAEwMyCw8'
-    }
-
-    def __init__(self, source, device=None):
-        assert source in self.gids
-        if not device:
-            device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        weights_filename = 'retinaface_%s.pth' % source
-        print('Initializing RetinaFace model (%s) for face detection' % source)
-
-        bn = 1e-05
-        smoothP5, smoothBefore, nonCumulative = False, False, False
-        
-        if source.startswith('biubug6_'):
-            bases = [
-                (8, [16, 32]),
-                (16, [64, 128]),
-                (32, [256, 512])
-            ]
-            score_thr, predict_landmarks = 0.02, True
-            to0_1, swapRB, mean, std = False, False, (104, 117, 123), (1, 1, 1) # mean values from ImageNet in GRB
-            P6 = None
-            smoothBefore = True
-            if source == 'biubug6_mobilenet':
-                backbone = MobileNetV1(0.25, relu_type='lrelu_0.1', return_inter=[5, 11])
-                cins, cout, relu = [64, 128, 256], 64, 'lrelu_0.1'
-            elif source == 'biubug6_resnet50':
-                backbone = ResNet50(return_count=3)
-                cins, cout, relu = [512, 1024, 2048], 256, 'plain'
-            wf = prep_weights_gdrive(self.gids[source], weights_filename)
-            wd_src = torch.load(wf, map_location=torch.device(device))
-
-        elif source.startswith('bbt_'):
-            bases = [
-                (4, [16, 20.16, 25.40]),
-                (8, [32, 40.32, 50.80]),
-                (16, [64, 80.63, 101.59]),
-                (32, [128, 161.26, 203.19]),
-                (64, [256, 322.54, 406.37])
-            ]
-            anchors = post.make_anchors([16, 32, 64, 128, 256], scales=[1, 2**(1/3), 2**(2/3)])
-            bases = list(zip([4, 8, 16, 32, 64], anchors))
-
-            score_thr, predict_landmarks = 0.5, False
-            #to0_1, swapRB, mean, std = False, True, (123.675, 116.28, 103.53), (58.395, 57.12, 57.375)
-            to0_1, swapRB, mean, std = True, True, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
-            cins, cout, relu = [256, 512, 1024, 2048], 256, 'plain'
-            P6 = 'fromC5'
-            nonCumulative = True
-            backbone = ResNet152() if source == 'bbt_resnet152_mixed' else ResNet50()
-            wf = prep_weights_gdrive(self.gids[source], weights_filename)
-            wd_src = torch.load(wf, map_location=torch.device(device))
-            # in this source, smoothP5 is not applied but the layer is still created for it for no reason
-            for s in ['conv.weight', 'bn.weight', 'bn.bias', 'bn.running_mean',
-                      'bn.running_var', 'bn.num_batches_tracked']:
-                wd_src.pop('fpn.lateral_outs.3.' + s)
-            # in this source, FPN extra P6 layer is placed between laterals and smooths, but we need after
-            wl = list(wd_src.items())
-            idx = [i for i, (n, _) in enumerate(wl) if n.startswith('fpn.lateral_ins.4')]
-            els = [wl.pop(idx[0]) for _ in idx]
-            pos = [i for i, (n, _) in enumerate(wl) if n.startswith('fpn.lateral_outs.')][-1]
-            for el in els[::-1]:
-                wl.insert(pos + 1, el)
-            wd_src = dict(wl)
-      
-        self.model = RetinaFace(backbone, cins, cout, relu, bn, P6, smoothP5, smoothBefore, nonCumulative,
-                                to0_1, swapRB, mean, std, bases, score_thr, predict_landmarks).to(device)
-        #for w in self.model.state_dict(): print(w, '\t', self.model.state_dict()[w].shape)
-        wd_dst = {}
-        names = list(wd_src)
-        for i, w in enumerate(list(self.model.state_dict())):
-            #print(names[i], ' to ', w)
-            wd_dst[w] = wd_src[names[i]]
-        self.model.load_state_dict(wd_dst)
         self.model.eval()
 
     def __call__(self, imgs):
