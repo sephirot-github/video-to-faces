@@ -68,9 +68,9 @@ def select_decode(reg_maps, cls_maps, priors, sz, score_thr, nms_thr, topk_map=N
         if topk_img:
             keep = keep[:topk_img]
         
-        rb.append(boxes[keep])
-        rs.append(scores[keep])
-        rl.append(labels[keep])
+        rb.append(boxes[keep].detach().cpu().numpy())
+        rs.append(scores[keep].detach().cpu().numpy())
+        rl.append(labels[keep].detach().cpu().numpy())
     return rb, rs, rl
     
 
@@ -101,6 +101,12 @@ def select_boxes(boxes, scores, score_thr, iou_thr, impl):
                 keep = nms(r[:, :4], r[:, 4], iou_thr)
             l.append(r[keep])
         return l
+
+
+def make_anchors(square_sizes, aspect_ratios):
+    mult = [math.sqrt(ar) for ar in aspect_ratios]
+    anchors = [[(sz / m, sz * m) for m in mult for sz in grp] for grp in square_sizes]
+    return anchors
 
 
 def get_priors(img_size, bases, dv='cpu', loc='center', patches='as_is'):

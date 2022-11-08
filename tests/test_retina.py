@@ -4,10 +4,32 @@ import unittest
 import cv2
 import numpy as np
 
-from videotofaces import RetinaFaceDetector
+from videotofaces.detectors.retina import RetinaFaceDetector, RetinaNetDetector
 
 
-class TestRetinaFace(unittest.TestCase):
+class TestRetina(unittest.TestCase):
+
+    def test_retinanet_torchvision(self):
+        model = RetinaNetDetector()
+        testdir = osp.dirname(osp.realpath(__file__))
+        im1 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_000139.jpg'))
+        im2 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_455157.jpg'))
+        b, s, l = model([im1, im2])
+        self.assertEqual(len(b), 2)
+        self.assertEqual(len(s), 2)
+        self.assertEqual(len(l), 2)
+        self.assertEqual(b[0].shape, (241, 4))
+        self.assertEqual(s[0].shape, (241,))
+        self.assertEqual(b[1].shape, (289, 4))
+        self.assertEqual(l[1].shape, (289,))
+        np.testing.assert_almost_equal(b[0][100], np.array([355.9958, 214.6334, 381.6148, 289.3761]), decimal=4)
+        np.testing.assert_almost_equal(b[0][200], np.array([316.8919, 223.6775, 359.7647, 310.6914]), decimal=4)
+        np.testing.assert_almost_equal(b[1][4], np.array([524.2617, 271.2829, 640.0000, 486.4187]), decimal=4)
+        np.testing.assert_almost_equal(b[1][-10], np.array([273.6294, 282.7190, 343.0640, 312.1264]), decimal=4)
+        np.testing.assert_almost_equal(s[0][50:55], np.array([0.1915, 0.1914, 0.1911, 0.1909, 0.1908]), decimal=4)
+        np.testing.assert_almost_equal(s[1][5:10], np.array([0.3458, 0.3283, 0.3276, 0.3109, 0.3082]), decimal=4)
+        np.testing.assert_equal(l[0][130:140], np.array([86, 63, 77, 67, 62, 1, 62, 67, 62, 76]))
+        np.testing.assert_equal(l[1][10:25], np.array([67, 67, 15, 1, 15, 15, 67, 67, 67, 1, 28, 27, 84, 67, 67]))
 
     # from WIDER_val:
     # irl_det_1 = "12_Group_Group_12_Group_Group_12_10.jpg"
