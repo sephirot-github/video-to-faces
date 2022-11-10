@@ -33,8 +33,7 @@ def resize(ts, resize_min, resize_max):
         ts[i] = F.interpolate(ts[i].unsqueeze(0), None, scl, 'bilinear', recompute_scale_factor=True)[0]
         sz_orig.append(sz)
         sz_used.append(ts[i].shape[1:3])
-    scales = torch.tensor(sz_used) / torch.tensor(sz_orig)
-    return ts, scales, sz_used
+    return ts, sz_orig, sz_used
 
 
 def batch(ts, mult):

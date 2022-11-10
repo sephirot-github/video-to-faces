@@ -33,47 +33,25 @@ def nms(boxes, scores, thresh):
     return keep
 
 
-def select_decode(reg_maps, cls_maps, priors, sz, score_thr, nms_thr, topk_map=None, topk_img=None):
-    """
-    """
-    bs = cls_maps[0].shape[0]
-    num_classes = cls_maps[0].shape[-1]
-    reg = torch.cat(reg_maps, dim=1)
-    cls = torch.cat(cls_maps, dim=1)
-    rb, rs, rl = [], [], []
+# todo
+def get_results_vect(reg, scr, priors, score_thr, iou_thr, decode_mults):
+    n = reg.shape[0]
+    k = torch.arange(n).repeat_interleave(reg.shape[1]).to(reg.device)
+    reg = reg.reshape(-1, reg.shape[-1])
+    scr = scr.reshape(-1, scr.shape[-1])
+    idx, scores, labels = select_by_score(scr, score_thr)
+    k = k[idx]
+    boxes = decode_boxes(reg[idx], priors[idx], *decode_mults)
+    if labels:
+        groups = k * 1000 + labels
+    boxes, scores, groups = do_nms(boxes, scores, groups, iou_thr)
+    if labels:
+        labels = groups % 1000
+        k = groups.div(1000, rounding_mode='floor')
+    #l = [r[k == i] for i in range(n)]
 
-    for i in range(bs):
-        
-        s = torch.sigmoid(cls[i]).flatten()
-        idx = torch.nonzero(s > score_thr).squeeze()
 
-        if topk_map:
-            map_borders = np.cumsum([0] + [m.shape[1] for m in reg_maps]) * num_classes
-            sel = []
-            for u in range(1, len(map_borders)):
-                midx = idx[(idx >= map_borders[u - 1]) * (idx < map_borders[u])]
-                _, top = torch.topk(s[midx], min(topk_map, midx.shape[0]))
-                sel.append(midx[top])
-            idx = torch.cat(sel)
-
-        scores = s[idx]
-        labels = idx % num_classes
-        sel = torch.div(idx, num_classes, rounding_mode='floor')
-
-        boxes = decode_boxes(reg[i][sel], priors[sel], 1, 1, math.log(1000 / 16))
-        boxes[:, 0::2] = torch.clamp(boxes[:, 0::2], max=sz[i][1])
-        boxes[:, 1::2] = torch.clamp(boxes[:, 1::2], max=sz[i][0])
-
-        keep = torchvision.ops.batched_nms(boxes, scores, labels, nms_thr)
-        if topk_img:
-            keep = keep[:topk_img]
-        
-        rb.append(boxes[keep].detach().cpu().numpy())
-        rs.append(scores[keep].detach().cpu().numpy())
-        rl.append(labels[keep].detach().cpu().numpy())
-    return rb, rs, rl
-    
-
+# redo
 def select_boxes(boxes, scores, score_thr, iou_thr, impl):
     assert impl in ['numpy', 'tvis', 'tvis_batched']
     n = boxes.shape[0]
@@ -101,6 +79,63 @@ def select_boxes(boxes, scores, score_thr, iou_thr, impl):
                 keep = nms(r[:, :4], r[:, 4], iou_thr)
             l.append(r[keep])
         return l
+        
+
+def select_by_score(scr, score_thr, ltopk=None, lsz=None, multiclassbox=False):
+    """"""
+    assert (ltopk is None) == (lsz is None), 'if "ltopk" is defined, "lsz" needs to be provided too'
+    num_classes = scr.shape[-1]
+    if num_classes == 1:
+        idx = torch.nonzero(scr > score_thr).squeeze()
+        idx = top_per_level(idx, scr, ltopk, lsz)
+        scores = scr[idx]
+        labels = None
+    elif not multiclassbox:
+        s, l = torch.max(scr, dim=-1)
+        idx = torch.nonzero(s > score_thr).squeeze()
+        idx = top_per_level(idx, s, ltopk, lsz)
+        scores = s[idx]
+        labels = l[idx]
+    else:                
+        s = scr.flatten()
+        idx = torch.nonzero(s > score_thr).squeeze()
+        idx = top_per_level(idx, s, ltopk, lsz, num_classes)
+        scores = s[idx]
+        labels = idx % num_classes
+        idx = torch.div(idx, num_classes, rounding_mode='floor')
+    return idx, scores, labels
+
+
+def top_per_level(idx, s, topk, lvl_sizes, mult=1):
+    """"""
+    if not topk:
+        return idx
+    borders = np.cumsum([0] + lvl_sizes) * mult
+    sel = []
+    for u in range(1, len(borders)):
+        lidx = idx[(idx >= borders[u - 1]) * (idx < borders[u])]
+        _, top = torch.topk(s[lidx], min(topk, lidx.shape[0]))
+        sel.append(lidx[top])
+    return torch.cat(sel)
+
+
+def clamp_to_canvas(boxes, img_size):
+    boxes[:, 0::2] = torch.clamp(boxes[:, 0::2], max=img_size[1])
+    boxes[:, 1::2] = torch.clamp(boxes[:, 1::2], max=img_size[0])
+    return boxes
+
+
+def do_nms(boxes, scores, labels, iou_thr, top=None):
+    keep = torchvision.ops.batched_nms(boxes, scores, labels, iou_thr)
+    keep = keep if not top else keep[:top]
+    b, s, l = [x[keep].detach().cpu().numpy() for x in [boxes, scores, labels]]
+    return b, s, l
+
+
+def scale_back(boxes, size_orig, size_used):
+    boxes[:, 0::2] *= size_orig[1] / size_used[1]
+    boxes[:, 1::2] *= size_orig[0] / size_used[0]
+    return boxes
 
 
 def make_anchors(dims, scales=[1], ratios=[1]):

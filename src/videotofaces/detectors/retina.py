@@ -270,30 +270,39 @@ class RetinaNet_TorchVision(nn.Module):
         backbone = ResNet50(return_count=3, bn_eps=0.0)
         cins = [512, 1024, 2048]
         cout = 256
-        num_anchors = 9
+        anchors_per_level = 9
         self.num_classes = 91
 
         self.body = backbone
         self.feature_pyramid = FPN(cins, cout, relu=None, bn=None, P6='fromP5', P7=True, smoothP5=True)
-        self.cls_head = HeadShared(cout, num_anchors, self.num_classes)
-        self.reg_head = HeadShared(cout, num_anchors, 4)
+        self.cls_head = HeadShared(cout, anchors_per_level, self.num_classes)
+        self.reg_head = HeadShared(cout, anchors_per_level, 4)
     
     def forward(self, imgs):
         dv = next(self.parameters()).device
         ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
-        ts, scl, sz = prep.resize(ts, resize_min=800, resize_max=1333)
+        ts, sz_orig, sz_used = prep.resize(ts, resize_min=800, resize_max=1333)
         x = prep.batch(ts, mult=32)
 
         xs = self.body(x)
         xs = self.feature_pyramid(xs)
-        reg = [self.reg_head(fmap) for fmap in xs]
-        log = [self.cls_head(fmap) for fmap in xs]
+        reg = [self.reg_head(lvl) for lvl in xs]
+        log = [self.cls_head(lvl) for lvl in xs]
+        
+        lsz = [lvl.shape[1] for lvl in log]
+        reg = torch.cat(reg, axis=1)
+        scr = torch.cat(log, axis=1).sigmoid_()
 
         priors = post.get_priors(x.shape[2:], self.get_bases(), dv, loc='corner', patches='fit')
-        b, s, l = post.select_decode(reg, log, priors, sz, 0.05, 0.5, topk_map=1000, topk_img=300)
+        res = []
         for i in range(x.shape[0]):
-            b[i][:, 0::2] /= scl[i][1]
-            b[i][:, 1::2] /= scl[i][0]
+            idx, si, li = post.select_by_score(scr[i], 0.05, 1000, lsz, multiclassbox=True)
+            bi = post.decode_boxes(reg[i][idx], priors[idx], 1, 1, math.log(1000 / 16))
+            bi = post.clamp_to_canvas(bi, sz_used[i])
+            bi, si, li = post.do_nms(bi, si, li, 0.5, top=300)
+            bi = post.scale_back(bi, sz_orig[i], sz_used[i])
+            res.append((bi, si, li))
+        b, s, l = map(list, zip(*res))
         return b, s, l
 
     def get_bases(self):
