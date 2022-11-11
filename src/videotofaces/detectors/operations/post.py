@@ -33,22 +33,84 @@ def nms(boxes, scores, thresh):
     return keep
 
 
-# todo
-def get_results_vect(reg, scr, priors, score_thr, iou_thr, decode_mults):
-    n = reg.shape[0]
-    k = torch.arange(n).repeat_interleave(reg.shape[1]).to(reg.device)
-    reg = reg.reshape(-1, reg.shape[-1])
-    scr = scr.reshape(-1, scr.shape[-1])
-    idx, scores, labels = select_by_score(scr, score_thr)
-    k = k[idx]
-    boxes = decode_boxes(reg[idx], priors[idx], *decode_mults)
-    if labels:
-        groups = k * 1000 + labels
-    boxes, scores, groups = do_nms(boxes, scores, groups, iou_thr)
-    if labels:
-        labels = groups % 1000
-        k = groups.div(1000, rounding_mode='floor')
-    #l = [r[k == i] for i in range(n)]
+def group_nms(boxes, scores, groups, iou_thr):
+    return torchvision.ops.batched_nms(boxes, scores, groups, iou_thr)
+
+
+def get_results(reg, scr, priors, score_thr, iou_thr, decode_mults, decode_clamp=None,
+                lvtop=None, levels=None, multiclassbox=False, sz_orig=None, sz_used=None,
+                imtop=None, impl='vect'):
+    assert impl in ['vect', 'loop']
+    if impl == 'vect':
+        n = reg.shape[0]
+        imidx = torch.arange(n, device=reg.device).repeat_interleave(reg.shape[1])
+        lvidx = None if levels is None else imidx * 100 + levels.repeat(n)
+        reg = reg.reshape(-1, reg.shape[-1])
+        scr = scr.reshape(-1, scr.shape[-1])
+        idx, scores, classes = select_by_score(scr, score_thr, lvtop, lvidx, multiclassbox)
+        imidx = imidx[idx]
+        boxes = decode_boxes(reg[idx], priors.repeat(n, 1)[idx], *decode_mults, decode_clamp)
+
+        boxes[:, 0::2].clamp_(min=torch.tensor(0), max=torch.tensor([sz[1] for sz in sz_used])[imidx, None])
+        boxes[:, 1::2].clamp_(min=torch.tensor(0), max=torch.tensor([sz[0] for sz in sz_used])[imidx, None])
+
+        if classes is None:
+            keep  = group_nms(boxes, scores, imidx, iou_thr)
+            boxes, scores, imidx = [x[keep] for x in [boxes, scores, imidx]]
+            cl = None
+        else:   
+            groups = imidx * 1000 + classes
+            keep = group_nms(boxes, scores, groups, iou_thr)
+            boxes, scores = [x[keep] for x in [boxes, scores]]
+            classes = groups[keep] % 1000
+            imidx = groups[keep].div(1000, rounding_mode='floor')
+            cl = [classes[imidx == i].detach().cpu().numpy() for i in range(n)]
+        
+        sz_orig = torch.tensor(sz_orig).to(reg.device)
+        sz_used = torch.tensor(sz_used).to(reg.device)
+        scaleback = (sz_orig / sz_used)[imidx]
+        boxes[:, 0::2] *= scaleback[:, 1][:, None]
+        boxes[:, 1::2] *= scaleback[:, 0][:, None]
+        
+        bl, sl = [[x[imidx == i].detach().cpu().numpy() for i in range(n)] for x in [boxes, scores]]
+        return bl, sl, cl
+     
+
+def select_by_score(scr, score_thr, lvtop=None, levels=None, multiclassbox=False):
+    """"""
+    assert (lvtop is None) == (levels is None), 'if "lvtop" is defined, "levels" needs to be provided too'
+    num_classes = scr.shape[-1]
+    if num_classes == 1:
+        idx = torch.nonzero(scr > score_thr).squeeze()
+        idx = top_per_level(idx, scr, lvtop, levels)
+        scores = scr[idx]
+        classes = None
+    elif not multiclassbox:
+        s, c = torch.max(scr, dim=-1)
+        idx = torch.nonzero(s > score_thr).squeeze()
+        idx = top_per_level(idx, s, lvtop, levels)
+        scores = s[idx]
+        classes = c[idx]
+    else:
+        s = scr.flatten()
+        idx = torch.nonzero(s > score_thr).squeeze()
+        idx = top_per_level(idx, s, lvtop, levels.repeat_interleave(num_classes))
+        scores = s[idx]
+        classes = idx % num_classes
+        idx = torch.div(idx, num_classes, rounding_mode='floor')
+    return idx, scores, classes
+
+
+def top_per_level(idx, s, lvtop, levels):
+    """"""
+    if not lvtop:
+        return idx
+    sel = []
+    for u in torch.unique_consecutive(levels):
+        lidx = idx[levels[idx] == u]
+        _, top = torch.topk(s[lidx], min(lvtop, lidx.shape[0]))
+        sel.append(lidx[top])
+    return torch.cat(sel)
 
 
 # redo
@@ -79,44 +141,6 @@ def select_boxes(boxes, scores, score_thr, iou_thr, impl):
                 keep = nms(r[:, :4], r[:, 4], iou_thr)
             l.append(r[keep])
         return l
-        
-
-def select_by_score(scr, score_thr, ltopk=None, lsz=None, multiclassbox=False):
-    """"""
-    assert (ltopk is None) == (lsz is None), 'if "ltopk" is defined, "lsz" needs to be provided too'
-    num_classes = scr.shape[-1]
-    if num_classes == 1:
-        idx = torch.nonzero(scr > score_thr).squeeze()
-        idx = top_per_level(idx, scr, ltopk, lsz)
-        scores = scr[idx]
-        labels = None
-    elif not multiclassbox:
-        s, l = torch.max(scr, dim=-1)
-        idx = torch.nonzero(s > score_thr).squeeze()
-        idx = top_per_level(idx, s, ltopk, lsz)
-        scores = s[idx]
-        labels = l[idx]
-    else:                
-        s = scr.flatten()
-        idx = torch.nonzero(s > score_thr).squeeze()
-        idx = top_per_level(idx, s, ltopk, lsz, num_classes)
-        scores = s[idx]
-        labels = idx % num_classes
-        idx = torch.div(idx, num_classes, rounding_mode='floor')
-    return idx, scores, labels
-
-
-def top_per_level(idx, s, topk, lvl_sizes, mult=1):
-    """"""
-    if not topk:
-        return idx
-    borders = np.cumsum([0] + lvl_sizes) * mult
-    sel = []
-    for u in range(1, len(borders)):
-        lidx = idx[(idx >= borders[u - 1]) * (idx < borders[u])]
-        _, top = torch.topk(s[lidx], min(topk, lidx.shape[0]))
-        sel.append(lidx[top])
-    return torch.cat(sel)
 
 
 def clamp_to_canvas(boxes, img_size):
