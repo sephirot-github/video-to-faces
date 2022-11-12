@@ -1,4 +1,5 @@
 import math
+import sys
 
 import numpy as np
 import torch
@@ -33,83 +34,130 @@ def nms(boxes, scores, thresh):
     return keep
 
 
-def group_nms(boxes, scores, groups, iou_thr):
-    return torchvision.ops.batched_nms(boxes, scores, groups, iou_thr)
+def do_nms(boxes, scores, groups, iou_thr, imtop):
+    if groups is None:
+        keep = torchvision.ops.nms(boxes, scores, iou_thr)
+    else:
+        keep = torchvision.ops.batched_nms(boxes, scores, groups, iou_thr)
+    if imtop:
+        keep = keep[:imtop]
+    return keep
 
 
-def get_results(reg, scr, priors, score_thr, iou_thr, decode_mults, decode_clamp=None,
-                lvtop=None, levels=None, multiclassbox=False, sz_orig=None, sz_used=None,
-                imtop=None, impl='vect'):
+def clamp_to_canvas(boxes, img_size):
+    boxes[:, 0::2] = torch.clamp(boxes[:, 0::2], max=img_size[1])
+    boxes[:, 1::2] = torch.clamp(boxes[:, 1::2], max=img_size[0])
+    return boxes
+
+
+def scale_back(boxes, size_orig, size_used):
+    boxes[:, 0::2] *= size_orig[1] / size_used[1]
+    boxes[:, 1::2] *= size_orig[0] / size_used[0]
+    return boxes
+
+
+def clamp_to_canvas_vect(boxes, sizes, imidx):
+    mx = torch.tensor(sizes['used']).flip(1).repeat(1, 2)[imidx, :]
+    boxes.clamp_(min=torch.tensor(0), max=mx)
+    return boxes
+
+
+def scale_back_vect(boxes, sizes, imidx):
+    sz_orig = torch.tensor(sizes['orig']).to(boxes.device)
+    sz_used = torch.tensor(sizes['used']).to(boxes.device)
+    scl = sz_orig / sz_used
+    boxes *= scl.flip(1).repeat(1, 2)[imidx, :]
+    return boxes
+
+
+def get_results(reg, scr, priors, score_thr, iou_thr, decode, lvtop={}, sizes={},
+                multiclassbox=False, imtop=None, impl='vect'):
     assert impl in ['vect', 'loop']
+    do_canvclamp = sizes and 'clamp' in sizes and sizes['clamp']
+    do_scaleback = sizes and 'orig' in sizes
+    
+    if impl == 'loop':
+        res = []
+        for i in range(reg.shape[0]):
+            idx, scores, classes = select_by_score(scr[i], score_thr, multiclassbox, lvtop)
+            boxes = decode_boxes(reg[i][idx], priors[idx], settings=decode)
+            if do_canvclamp:
+                boxes = clamp_to_canvas(boxes, sizes['used'][i])
+            keep = do_nms(boxes, scores, classes, iou_thr, imtop)
+            b, s, c = boxes[keep], scores[keep], classes[keep] if classes else None
+            if do_scaleback:
+                b = scale_back(b, sizes['orig'][i], sizes['used'][i])
+            res.append((b, s, c))
+        bl, sl, cl = map(list, zip(*res))
+        return bl, sl, cl
+             
     if impl == 'vect':
         n = reg.shape[0]
         imidx = torch.arange(n, device=reg.device).repeat_interleave(reg.shape[1])
-        lvidx = None if levels is None else imidx * 100 + levels.repeat(n)
+        print(imidx.shape, sys.getsizeof(imidx.storage()))
         reg = reg.reshape(-1, reg.shape[-1])
         scr = scr.reshape(-1, scr.shape[-1])
-        idx, scores, classes = select_by_score(scr, score_thr, lvtop, lvidx, multiclassbox)
+        idx, scores, classes = select_by_score(scr, score_thr, multiclassbox, {**lvtop, 'nimg': n})
         imidx = imidx[idx]
-        boxes = decode_boxes(reg[idx], priors.repeat(n, 1)[idx], *decode_mults, decode_clamp)
-
-        boxes[:, 0::2].clamp_(min=torch.tensor(0), max=torch.tensor([sz[1] for sz in sz_used])[imidx, None])
-        boxes[:, 1::2].clamp_(min=torch.tensor(0), max=torch.tensor([sz[0] for sz in sz_used])[imidx, None])
-
+        boxes = decode_boxes(reg[idx], priors[idx % n], settings=decode)
+        if do_canvclamp:
+            boxes = clamp_to_canvas_vect(boxes, sizes, imidx)
         if classes is None:
-            keep  = group_nms(boxes, scores, imidx, iou_thr)
+            keep  = do_nms(boxes, scores, imidx, iou_thr, imtop)
             boxes, scores, imidx = [x[keep] for x in [boxes, scores, imidx]]
             cl = None
         else:   
             groups = imidx * 1000 + classes
-            keep = group_nms(boxes, scores, groups, iou_thr)
+            keep = do_nms(boxes, scores, groups, iou_thr, imtop)
             boxes, scores = [x[keep] for x in [boxes, scores]]
             classes = groups[keep] % 1000
             imidx = groups[keep].div(1000, rounding_mode='floor')
             cl = [classes[imidx == i].detach().cpu().numpy() for i in range(n)]
-        
-        sz_orig = torch.tensor(sz_orig).to(reg.device)
-        sz_used = torch.tensor(sz_used).to(reg.device)
-        scaleback = (sz_orig / sz_used)[imidx]
-        boxes[:, 0::2] *= scaleback[:, 1][:, None]
-        boxes[:, 1::2] *= scaleback[:, 0][:, None]
-        
+        if do_scaleback:
+            boxes = scale_back_vect(boxes, sizes, imidx)
         bl, sl = [[x[imidx == i].detach().cpu().numpy() for i in range(n)] for x in [boxes, scores]]
         return bl, sl, cl
      
 
-def select_by_score(scr, score_thr, lvtop=None, levels=None, multiclassbox=False):
+def select_by_score(scr, score_thr, multiclassbox=False, lvtop={}):
     """"""
-    assert (lvtop is None) == (levels is None), 'if "lvtop" is defined, "levels" needs to be provided too'
     num_classes = scr.shape[-1]
     if num_classes == 1:
         idx = torch.nonzero(scr > score_thr).squeeze()
-        idx = top_per_level(idx, scr, lvtop, levels)
+        idx = top_per_level(idx, scr, lvtop)
         scores = scr[idx]
         classes = None
     elif not multiclassbox:
         s, c = torch.max(scr, dim=-1)
         idx = torch.nonzero(s > score_thr).squeeze()
-        idx = top_per_level(idx, s, lvtop, levels)
+        idx = top_per_level(idx, s, lvtop)
         scores = s[idx]
         classes = c[idx]
     else:
         s = scr.flatten()
         idx = torch.nonzero(s > score_thr).squeeze()
-        idx = top_per_level(idx, s, lvtop, levels.repeat_interleave(num_classes))
+        idx = top_per_level(idx, s, {**lvtop, 'mult': num_classes})
         scores = s[idx]
         classes = idx % num_classes
         idx = torch.div(idx, num_classes, rounding_mode='floor')
     return idx, scores, classes
 
 
-def top_per_level(idx, s, lvtop, levels):
+def top_per_level(idx, s, lvtop):
     """"""
-    if not lvtop:
+    try:
+        limit = lvtop['topk_per_level']
+    except KeyError:
         return idx
+    mult = 1 if ('mult' not in lvtop) else lvtop['mult']
+    nimg = 1 if ('nimg' not in lvtop) else lvtop['nimg']
     sel = []
-    for u in torch.unique_consecutive(levels):
-        lidx = idx[levels[idx] == u]
-        _, top = torch.topk(s[lidx], min(lvtop, lidx.shape[0]))
-        sel.append(lidx[top])
+    for i in range(nimg):
+        borders = np.cumsum([0] + lvtop['level_sizes']) * mult * i
+        for j in range(1, len(borders)):
+            lvidx = idx[(idx >= borders[j - 1]) * (idx < borders[j])]
+            _, top = torch.topk(s[lvidx], min(limit, lvidx.shape[0]))
+            sel.append(lvidx[top])
     return torch.cat(sel)
 
 
@@ -141,25 +189,6 @@ def select_boxes(boxes, scores, score_thr, iou_thr, impl):
                 keep = nms(r[:, :4], r[:, 4], iou_thr)
             l.append(r[keep])
         return l
-
-
-def clamp_to_canvas(boxes, img_size):
-    boxes[:, 0::2] = torch.clamp(boxes[:, 0::2], max=img_size[1])
-    boxes[:, 1::2] = torch.clamp(boxes[:, 1::2], max=img_size[0])
-    return boxes
-
-
-def do_nms(boxes, scores, labels, iou_thr, top=None):
-    keep = torchvision.ops.batched_nms(boxes, scores, labels, iou_thr)
-    keep = keep if not top else keep[:top]
-    b, s, l = [x[keep].detach().cpu().numpy() for x in [boxes, scores, labels]]
-    return b, s, l
-
-
-def scale_back(boxes, size_orig, size_used):
-    boxes[:, 0::2] *= size_orig[1] / size_used[1]
-    boxes[:, 1::2] *= size_orig[0] / size_used[0]
-    return boxes
 
 
 def make_anchors(dims, scales=[1], ratios=[1]):
@@ -221,7 +250,7 @@ def get_priors(img_size, bases, dv='cpu', loc='center', patches='as_is'):
     return torch.cat(p)
 
 
-def decode_boxes(pred, priors, mult_xy=1, mult_wh=1, max_exp_input=None):
+def decode_boxes(pred, priors, settings):
     """Converts predicted boxes from network outputs into actual image coordinates based on some
     fixed starting ``priors`` using Eq.1-4 from here: https://arxiv.org/pdf/1311.2524.pdf
     (as linked by Fast R-CNN paper, which is in turn linked by RetinaFace paper).
@@ -231,8 +260,9 @@ def decode_boxes(pred, priors, mult_xy=1, mult_wh=1, max_exp_input=None):
     here too for scaling the numbers back). See https://github.com/rykov8/ssd_keras/issues/53 and
     https://leimao.github.io/blog/Bounding-Box-Encoding-Decoding/#Representation-Encoding-With-Variance
     """
+    mult_xy, mult_wh = settings['mults']
     xys = priors[:, 2:] * mult_xy * pred[..., :2] + priors[:, :2]
-    whs = priors[:, 2:] * exp_clamped(mult_wh * pred[..., 2:], max_exp_input)
+    whs = priors[:, 2:] * exp_clamped(mult_wh * pred[..., 2:], settings['max_exp_input'])
     boxes = torch.cat([xys - whs / 2, xys + whs / 2], dim=-1)
     return boxes
 

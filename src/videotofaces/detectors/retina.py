@@ -278,7 +278,7 @@ class RetinaNet_TorchVision(nn.Module):
         self.cls_head = HeadShared(cout, anchors_per_level, self.num_classes)
         self.reg_head = HeadShared(cout, anchors_per_level, 4)
     
-    def forward(self, imgs):
+    def forward(self, imgs, score_thr=0.05, iou_thr=0.5, post_impl='vect'):
         dv = next(self.parameters()).device
         ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
         ts, sz_orig, sz_used = prep.resize(ts, resize_min=800, resize_max=1333)
@@ -288,27 +288,17 @@ class RetinaNet_TorchVision(nn.Module):
         xs = self.feature_pyramid(xs)
         reg = [self.reg_head(lvl) for lvl in xs]
         log = [self.cls_head(lvl) for lvl in xs]
-        
-        lvsizes = torch.tensor([lvl.shape[1] for lvl in log])
-        lvidx = torch.arange(len(log), device=dv).repeat_interleave(lvsizes)
+        lsz = [lvl.shape[1] for lvl in log]
         reg = torch.cat(reg, axis=1)
         scr = torch.cat(log, axis=1).sigmoid_()
 
         priors = post.get_priors(x.shape[2:], self.get_bases(), dv, loc='corner', patches='fit')
-        b, s, l = post.get_results(reg, scr, priors, 0.05, 0.5, [1, 1], math.log(1000 / 16),
-                         lvtop=1000, levels=lvidx, multiclassbox=True, sz_orig=sz_orig, sz_used=sz_used,
-                         imtop=300)
-        return b, s, l
-        #res = []
-        #for i in range(x.shape[0]):
-        #    idx, si, li = post.select_by_score(scr[i], 0.05, 1000, lsz, multiclassbox=True)
-        #    bi = post.decode_boxes(reg[i][idx], priors[idx], 1, 1, math.log(1000 / 16))
-        #    bi = post.clamp_to_canvas(bi, sz_used[i])
-        #    bi, si, li = post.do_nms(bi, si, li, 0.5, top=300)
-        #    bi = post.scale_back(bi, sz_orig[i], sz_used[i])
-        #    res.append((bi, si, li))
-        #b, s, l = map(list, zip(*res))
-        #return b, s, l
+        boxes, scores, classes = post.get_results(
+            reg, scr, priors, score_thr, iou_thr, multiclassbox=True, imtop=300, impl=post_impl,
+            lvtop={'topk_per_level': 1000, 'level_sizes': lsz},
+            decode={'mults': (1, 1), 'max_exp_input': math.log(1000 / 16)},
+            sizes={'used': sz_used, 'orig': sz_orig, 'clamp': True})
+        return boxes, scores, classes
 
     def get_bases(self):
         # equivalent to:
