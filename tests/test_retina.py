@@ -41,7 +41,8 @@ class TestRetina(unittest.TestCase):
         model = RetinaDetector('face_biubug6_mobilenet')
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [1, 2, 3, 4]]
-        rb = model(imgs)
+        b, s = model(imgs)
+        rb = [np.hstack([b[i], s[i][:, None]]) for i in range(len(b))]
         self.assertEqual(len(rb), 4)
         self.assertEqual(rb[0].shape, (24, 5))
         self.assertEqual(rb[1].shape, (20, 5))
@@ -60,7 +61,8 @@ class TestRetina(unittest.TestCase):
         model = RetinaDetector('face_biubug6_resnet50')
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [1, 2]]
-        rb = model(imgs)
+        b, s = model(imgs)
+        rb = [np.hstack([b[i], s[i][:, None]]) for i in range(len(b))]
         self.assertEqual(len(rb), 2)
         self.assertEqual(rb[0].shape, (14, 5))
         self.assertEqual(rb[1].shape, (9, 5))
@@ -71,7 +73,8 @@ class TestRetina(unittest.TestCase):
         model = RetinaDetector('face_bbt_resnet50_mixed')
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [3, 4]]
-        rb = model(imgs)
+        b, s = model(imgs)
+        rb = [np.hstack([b[i], s[i][:, None]]) for i in range(len(b))]
         self.assertEqual(rb[0].shape, (43, 5))
         self.assertEqual(rb[1].shape, (27, 5)) 
         np.testing.assert_almost_equal(rb[0][2], np.array([162.3646, 301.0576, 217.6351, 372.3147, 0.9209]), decimal=4)
@@ -81,7 +84,8 @@ class TestRetina(unittest.TestCase):
         model = RetinaDetector('face_bbt_resnet152_mixed')
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [3, 4]]
-        rb = model(imgs)
+        b, s = model(imgs)
+        rb = [np.hstack([b[i], s[i][:, None]]) for i in range(len(b))]
         self.assertEqual(rb[0].shape, (43, 5))
         self.assertEqual(rb[1].shape, (26, 5))
         np.testing.assert_almost_equal(rb[0][1], np.array([46.0401, 243.8737, 103.3121, 305.6734, 0.9241]), decimal=4)

@@ -147,15 +147,8 @@ class RetinaFace_Biubug6(nn.Module):
         else:
             backbone = ResNet50(return_count=3)
             cins, cout, relu = [512, 1024, 2048], 256, 'plain'
-
-        self.bases = [
-            (8, [16, 32]),
-            (16, [64, 128]),
-            (32, [256, 512])
-        ]
         self.bases = list(zip([8, 16, 32], post.make_anchors([16, 64, 256], scales=[1, 2])))
         num_anchors = 2
-
         self.body = backbone
         self.feature_pyramid = FPN(cins, cout, relu, smoothBeforeMerge=True)
         self.context_modules = nn.ModuleList([SSH(cout, cout, relu) for _ in range(len(cins))])
@@ -171,15 +164,14 @@ class RetinaFace_Biubug6(nn.Module):
         xs = self.body(x)
         xs = self.feature_pyramid(xs)
         xs = [self.context_modules[i](xs[i]) for i in range(len(xs))]
-        box_reg = torch.cat([self.heads_boxes[i](xs[i]) for i in range(len(xs))], dim=1)
-        classif = torch.cat([self.heads_class[i](xs[i]) for i in range(len(xs))], dim=1)
-        #ldm_reg = torch.cat([self.heads_ldmks[i](xs[i]) for i in range(len(xs))], dim=1)
+        reg = torch.cat([self.heads_boxes[i](xs[i]) for i in range(len(xs))], dim=1)
+        cls = torch.cat([self.heads_class[i](xs[i]) for i in range(len(xs))], dim=1)
+        #ldm = torch.cat([self.heads_ldmks[i](xs[i]) for i in range(len(xs))], dim=1)
         
-        scores = F.softmax(classif, dim=-1)[:, :, 1]
+        scr = F.softmax(cls, dim=-1)[:, :, 1]
         priors = post.get_priors(x.shape[2:], self.bases, dv, loc='center')
-        boxes = post.decode_boxes(box_reg, priors, 0.1, 0.2)
-        l = post.select_boxes(boxes, scores, score_thr=0.02, iou_thr=0.4, impl='tvis')
-        return l
+        b, s, _ = post.get_results(reg, scr, priors, 0.02, 0.4, decode=(0.1, 0.2))
+        return b, s
 
     def get_pretrained_weights(self, dv, source):
         if source.endswith('mobilenet'):
@@ -205,11 +197,9 @@ class RetinaFace_BBT(nn.Module):
         cins = [256, 512, 1024, 2048]
         cout = 256
         relu='plain'
-
         anchors = post.make_anchors([16, 32, 64, 128, 256], scales=[1, 2**(1/3), 2**(2/3)])
         self.bases = list(zip([4, 8, 16, 32, 64], anchors))
         num_anchors = 3
-
         self.body = backbone
         self.feature_pyramid = FPN(cins, cout, relu, P6='fromC5', nonCumulative=True)
         self.context_modules = nn.ModuleList([SSH(cout, cout, relu) for _ in range(len(cins) + 1)])
@@ -224,14 +214,13 @@ class RetinaFace_BBT(nn.Module):
         xs = self.body(x)
         xs = self.feature_pyramid(xs)
         xs = [self.context_modules[i](xs[i]) for i in range(len(xs))]
-        box_reg = torch.cat([self.heads_boxes[i](xs[i]) for i in range(len(xs))], dim=1)
-        classif = torch.cat([self.heads_class[i](xs[i]) for i in range(len(xs))], dim=1)
+        reg = torch.cat([self.heads_boxes[i](xs[i]) for i in range(len(xs))], dim=1)
+        cls = torch.cat([self.heads_class[i](xs[i]) for i in range(len(xs))], dim=1)
              
-        scores = F.softmax(classif, dim=-1)[:, :, 1]
+        scr = F.softmax(cls, dim=-1)[:, :, 1]
         priors = post.get_priors(x.shape[2:], self.bases, dv, loc='center')
-        boxes = post.decode_boxes(box_reg, priors, 0.1, 0.2)
-        l = post.select_boxes(boxes, scores, score_thr=0.5, iou_thr=0.4, impl='tvis')
-        return l
+        b, s, _ = post.get_results(reg, scr, priors, 0.5, 0.4, decode=(0.1, 0.2))
+        return b, s
 
     def get_pretrained_weights(self, dv, source):
         gids = {
@@ -272,18 +261,17 @@ class RetinaNet_TorchVision(nn.Module):
         cout = 256
         anchors_per_level = 9
         self.num_classes = 91
-
         self.body = backbone
         self.feature_pyramid = FPN(cins, cout, relu=None, bn=None, P6='fromP5', P7=True, smoothP5=True)
         self.cls_head = HeadShared(cout, anchors_per_level, self.num_classes)
         self.reg_head = HeadShared(cout, anchors_per_level, 4)
     
-    def forward(self, imgs, score_thr=0.05, iou_thr=0.5, post_impl='vect'):
+    def forward(self, imgs, score_thr=0.05, iou_thr=0.5, post_impl='vectorized'):
         dv = next(self.parameters()).device
         ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
         ts, sz_orig, sz_used = prep.resize(ts, resize_min=800, resize_max=1333)
         x = prep.batch(ts, mult=32)
-
+        
         xs = self.body(x)
         xs = self.feature_pyramid(xs)
         reg = [self.reg_head(lvl) for lvl in xs]
@@ -294,10 +282,9 @@ class RetinaNet_TorchVision(nn.Module):
 
         priors = post.get_priors(x.shape[2:], self.get_bases(), dv, loc='corner', patches='fit')
         boxes, scores, classes = post.get_results(
-            reg, scr, priors, score_thr, iou_thr, multiclassbox=True, imtop=300, impl=post_impl,
-            lvtop={'topk_per_level': 1000, 'level_sizes': lsz},
-            decode={'mults': (1, 1), 'max_exp_input': math.log(1000 / 16)},
-            sizes={'used': sz_used, 'orig': sz_orig, 'clamp': True})
+            reg, scr, priors, score_thr, iou_thr, decode=(1, 1, math.log(1000 / 16)),
+            lvtop=1000, lvsizes=lsz, multiclassbox=True, imtop=300, implementation=post_impl,
+            scale=True, clamp=True, sizes_used=sz_used, sizes_orig=sz_orig)
         return boxes, scores, classes
 
     def get_bases(self):
