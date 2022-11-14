@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV1
 from ..backbones.resnet import ResNet50, ResNet152
-from ..utils.download import prep_weights_gdrive, prep_weights_file
+from ..utils.weights import load_weights
 from .operations import prep, post
 
 # Source 1: https://github.com/biubug6/Pytorch_Retinaface
@@ -139,14 +139,16 @@ class HeadShared(nn.Module):
 
 class RetinaFace_Biubug6(nn.Module):
 
-    def __init__(self, mobilenet=True):
+    def __init__(self, pretrained='mobilenet', device='cpu'):
         super().__init__()
-        if mobilenet:
+        if pretrained == 'mobilenet':
             backbone = MobileNetV1(0.25, relu_type='lrelu_0.1', return_inter=[5, 11])
             cins, cout, relu = [64, 128, 256], 64, 'lrelu_0.1'
+            link = '15zP8BP-5IvWXWZoYTNdvUJUiBqZ1hxu1'
         else:
             backbone = ResNet50(return_count=3)
             cins, cout, relu = [512, 1024, 2048], 256, 'plain'
+            link = '14KX6VqF69MdSPk3Tr9PlDYbq7ArpdNUW'
         self.bases = list(zip([8, 16, 32], post.make_anchors([16, 64, 256], scales=[1, 2])))
         num_anchors = 2
         self.body = backbone
@@ -155,6 +157,9 @@ class RetinaFace_Biubug6(nn.Module):
         self.heads_class = nn.ModuleList([Head(cout, num_anchors, 2) for _ in range(len(cins))])
         self.heads_boxes = nn.ModuleList([Head(cout, num_anchors, 4) for _ in range(len(cins))])
         self.heads_ldmks = nn.ModuleList([Head(cout, num_anchors, 10) for _ in range(len(cins))])
+        self.to(device)
+        if pretrained:
+            load_weights(self, link, 'retina_face_biubug6_%s.pth' % pretrained, device)
 
     def forward(self, imgs):
         dv = next(self.parameters()).device
@@ -173,27 +178,12 @@ class RetinaFace_Biubug6(nn.Module):
         b, s, _ = post.get_results(reg, scr, priors, 0.02, 0.4, decode=(0.1, 0.2))
         return b, s
 
-    def get_pretrained_weights(self, dv, source):
-        if source.endswith('mobilenet'):
-            gid = '15zP8BP-5IvWXWZoYTNdvUJUiBqZ1hxu1'
-        else:
-            gid = '14KX6VqF69MdSPk3Tr9PlDYbq7ArpdNUW'
-        nm = 'retina_%s.pth' % source
-        wf = prep_weights_gdrive(gid, nm)
-        wd_src = torch.load(wf, map_location=torch.device(dv))
-        wd_dst = {}
-        names = list(wd_src)
-        for i, w in enumerate(list(self.state_dict())):
-            #print(names[i], ' to ', w)
-            wd_dst[w] = wd_src[names[i]]
-        return wd_dst
-
 
 class RetinaFace_BBT(nn.Module):
 
-    def __init__(self, resnet50=True):
+    def __init__(self, pretrained='resnet50_wider', device='cpu', resnet50=True):
         super().__init__()
-        backbone = ResNet50() if resnet50 else ResNet152()
+        backbone = ResNet50() if pretrained.startswith('resnet50') else ResNet152()
         cins = [256, 512, 1024, 2048]
         cout = 256
         relu='plain'
@@ -205,7 +195,11 @@ class RetinaFace_BBT(nn.Module):
         self.context_modules = nn.ModuleList([SSH(cout, cout, relu) for _ in range(len(cins) + 1)])
         self.heads_class = nn.ModuleList([Head(cout, num_anchors, 2) for _ in range(len(cins) + 1)])
         self.heads_boxes = nn.ModuleList([Head(cout, num_anchors, 4) for _ in range(len(cins) + 1)])
-
+        self.to(device)
+        if pretrained:
+            fn = 'retina_face_bbt_%s.pth' % pretrained
+            load_weights(self, self.links[pretrained], fn, device, self.conversion)
+    
     def forward(self, imgs):
         dv = next(self.parameters()).device
         ts = prep.normalize(imgs, dv, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
@@ -222,39 +216,31 @@ class RetinaFace_BBT(nn.Module):
         b, s, _ = post.get_results(reg, scr, priors, 0.5, 0.4, decode=(0.1, 0.2))
         return b, s
 
-    def get_pretrained_weights(self, dv, source):
-        gids = {
-            'face_bbt_resnet152_mixed': '1xB5RO99bVnXLYesnilzaZL2KWz4BsJfM',
-            'face_bbt_resnet50_mixed': '1uraA7ZdCCmos0QSVR6CJgg0aSLtV4q4m',
-            'face_bbt_resnet50_wider': '1pQLydyUUEwpEf06ElR2fw8_x2-P9RImT',
-            'face_bbt_resnet50_icartoon': '12RsVC1QulqsSlsCleMkIYMHsAEwMyCw8'
-        }
-        nm = 'retina_%s.pth' % source
-        wf = prep_weights_gdrive(gids[source], nm)
-        wd_src = torch.load(wf, map_location=torch.device(dv))
-        
+    links = {
+        'resnet152_mixed': '1xB5RO99bVnXLYesnilzaZL2KWz4BsJfM',
+        'resnet50_mixed': '1uraA7ZdCCmos0QSVR6CJgg0aSLtV4q4m',
+        'resnet50_wider': '1pQLydyUUEwpEf06ElR2fw8_x2-P9RImT',
+        'resnet50_icartoon': '12RsVC1QulqsSlsCleMkIYMHsAEwMyCw8'
+    }
+    def conversion(self, wd):
         # in this source, smoothP5 is not applied but the layer is still created for it for no reason
-        for s in ['conv.weight', 'bn.weight', 'bn.bias', 'bn.running_mean', 'bn.running_var', 'bn.num_batches_tracked']:
-            wd_src.pop('fpn.lateral_outs.3.' + s)
+        for s in ['conv.weight', 'bn.weight', 'bn.bias', 'bn.running_mean',
+                  'bn.running_var', 'bn.num_batches_tracked']:
+            wd.pop('fpn.lateral_outs.3.' + s)
         # in this source, FPN extra P6 layer is placed between laterals and smooths, but we need after
-        wl = list(wd_src.items())
+        wl = list(wd.items())
         idx = [i for i, (n, _) in enumerate(wl) if n.startswith('fpn.lateral_ins.4')]
         els = [wl.pop(idx[0]) for _ in idx]
         pos = [i for i, (n, _) in enumerate(wl) if n.startswith('fpn.lateral_outs.')][-1]
         for el in els[::-1]:
             wl.insert(pos + 1, el)
-        wd_src = dict(wl)
-
-        wd_dst = {}
-        names = list(wd_src)
-        for i, w in enumerate(list(self.state_dict())):
-            wd_dst[w] = wd_src[names[i]]
-        return wd_dst
+        wd = dict(wl)
+        return wd
 
 
 class RetinaNet_TorchVision(nn.Module):
 
-    def __init__(self):
+    def __init__(self, pretrained=True, device='cpu'):
         super().__init__()
         backbone = ResNet50(return_count=3, bn_eps=0.0)
         cins = [512, 1024, 2048]
@@ -265,6 +251,11 @@ class RetinaNet_TorchVision(nn.Module):
         self.feature_pyramid = FPN(cins, cout, relu=None, bn=None, P6='fromP5', P7=True, smoothP5=True)
         self.cls_head = HeadShared(cout, anchors_per_level, self.num_classes)
         self.reg_head = HeadShared(cout, anchors_per_level, 4)
+        self.to(device)
+        if pretrained:
+            link = 'https://download.pytorch.org/models/retinanet_resnet50_fpn_coco-eeacb38b.pth'
+            fn = 'retina_net_torchvision_resnet50_coco.pth'
+            load_weights(self, link, fn, device, add_num_batches=True)
     
     def forward(self, imgs, score_thr=0.05, iou_thr=0.5, post_impl='vectorized'):
         dv = next(self.parameters()).device
@@ -301,25 +292,6 @@ class RetinaNet_TorchVision(nn.Module):
             (128, [(724, 362), (912, 456), (1148, 574), (512, 512), (644, 644), (812, 812), (362, 724), (456, 912), (574, 1148)])
         ]
 
-    def get_pretrained_weights(self, dv, source):
-        link = 'https://download.pytorch.org/models/retinanet_resnet50_fpn_coco-eeacb38b.pth'
-        nm = 'retina_%s.pth' % source
-        wf = prep_weights_file(link, nm)
-        wd_src = torch.load(wf, map_location=torch.device(dv))
-        
-        # source file doesn't have 'num_batches_tracked' entries, but they're used only in
-        # train mode and only if BatchNorm2d 'momentum' param = None, so we just fill them with 0
-        wd_dst = {}
-        names = list(wd_src)
-        shift = 0
-        for i, w in enumerate(list(self.state_dict())):
-            if w.endswith('num_batches_tracked'):
-                wd_dst[w] = torch.tensor(0)
-                shift += 1
-            else:
-                wd_dst[w] = wd_src[names[i - shift]]
-        return wd_dst
-
 
 class RetinaDetector():
 
@@ -338,20 +310,13 @@ class RetinaDetector():
 
         if source == 'net_torchvision_resnet50_coco':
             self.model = RetinaNet_TorchVision()
-
         elif source.startswith('face_biubug6'):
-            self.model = RetinaFace_Biubug6(source.endswith('mobilenet'))
- 
+            self.model = RetinaFace_Biubug6(source[13:])
         else:
-            self.model = RetinaFace_BBT('resnet50' in source)
+            self.model = RetinaFace_BBT(source[9:])
         
-        #for w in self.model.state_dict(): print(w, '\t', self.model.state_dict()[w].shape)
-        wd = self.model.get_pretrained_weights(device, source)
-        self.model = self.model.to(device)
-        self.model.load_state_dict(wd)
         self.model.eval()
 
     def __call__(self, imgs):
-        with torch.no_grad():
-            res = self.model(imgs)
-        return res
+        with torch.inference_mode():
+            return self.model(imgs)
