@@ -139,16 +139,19 @@ class HeadShared(nn.Module):
 
 class RetinaFace_Biubug6(nn.Module):
 
-    def __init__(self, pretrained='mobilenet', device='cpu'):
+    links = {
+        'mobilenet': '15zP8BP-5IvWXWZoYTNdvUJUiBqZ1hxu1',
+        'resnet50': '14KX6VqF69MdSPk3Tr9PlDYbq7ArpdNUW'
+    }
+
+    def __init__(self, mobile=True, pretrained='mobilenet', device='cpu'):
         super().__init__()
-        if pretrained == 'mobilenet':
+        if mobile:
             backbone = MobileNetV1(0.25, relu_type='lrelu_0.1', return_inter=[5, 11])
             cins, cout, relu = [64, 128, 256], 64, 'lrelu_0.1'
-            link = '15zP8BP-5IvWXWZoYTNdvUJUiBqZ1hxu1'
         else:
             backbone = ResNet50(return_count=3)
             cins, cout, relu = [512, 1024, 2048], 256, 'plain'
-            link = '14KX6VqF69MdSPk3Tr9PlDYbq7ArpdNUW'
         self.bases = list(zip([8, 16, 32], post.make_anchors([16, 64, 256], scales=[1, 2])))
         num_anchors = 2
         self.body = backbone
@@ -159,7 +162,7 @@ class RetinaFace_Biubug6(nn.Module):
         self.heads_ldmks = nn.ModuleList([Head(cout, num_anchors, 10) for _ in range(len(cins))])
         self.to(device)
         if pretrained:
-            load_weights(self, link, 'retina_face_biubug6_%s.pth' % pretrained, device)
+            load_weights(self, self.links[pretrained], pretrained, device)
 
     def forward(self, imgs):
         dv = next(self.parameters()).device
@@ -291,32 +294,3 @@ class RetinaNet_TorchVision(nn.Module):
             (64,  [(362, 182), (456, 228), (574, 288),  (256, 256), (322, 322), (406, 406), (182, 362), (228, 456), (288, 574)]),
             (128, [(724, 362), (912, 456), (1148, 574), (512, 512), (644, 644), (812, 812), (362, 724), (456, 912), (574, 1148)])
         ]
-
-
-class RetinaDetector():
-
-    variations = [
-        'net_torchvision_resnet50_coco',
-        'face_biubug6_mobilenet', 'face_biubug6_resnet50',
-        'face_bbt_resnet152_mixed', 'face_bbt_resnet50_mixed',
-        'face_bbt_resnet50_wider', 'face_bbt_resnet50_icartoon'
-    ]
-
-    def __init__(self, source, device=None):
-        assert source in self.variations
-        if not device:
-            device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        print('Initializing Retina model for detection (%s)' % source)
-
-        if source == 'net_torchvision_resnet50_coco':
-            self.model = RetinaNet_TorchVision()
-        elif source.startswith('face_biubug6'):
-            self.model = RetinaFace_Biubug6(source[13:])
-        else:
-            self.model = RetinaFace_BBT(source[9:])
-        
-        self.model.eval()
-
-    def __call__(self, imgs):
-        with torch.inference_mode():
-            return self.model(imgs)

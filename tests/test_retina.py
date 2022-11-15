@@ -4,13 +4,13 @@ import unittest
 import cv2
 import numpy as np
 
-from videotofaces.detectors.retina import RetinaDetector
+from videotofaces import Detector
 
 
 class TestRetina(unittest.TestCase):
 
     def test_retinanet_torchvision(self):
-        model = RetinaDetector('net_torchvision_resnet50_coco')
+        model = Detector('RetinaNet')
         testdir = osp.dirname(osp.realpath(__file__))
         im1 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_000139.jpg'))
         im2 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_455157.jpg'))
@@ -38,7 +38,7 @@ class TestRetina(unittest.TestCase):
     # irl_det_4 = "17_Ceremony_Ceremony_17_171.jpg"
 
     def test_mobilenet(self):
-        model = RetinaDetector('face_biubug6_mobilenet')
+        model = Detector('RetinaFace', 'Biubug6_MobileNet')
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [1, 2, 3, 4]]
         b, s = model(imgs)
