@@ -4,13 +4,13 @@ import unittest
 import cv2
 import numpy as np
 
-from videotofaces import Detector
+from videotofaces import Detector, detmodels
 
 
 class TestRetina(unittest.TestCase):
 
     def test_retinanet_torchvision(self):
-        model = Detector('RetinaNet')
+        model = Detector(detmodels.RetinaNet)
         testdir = osp.dirname(osp.realpath(__file__))
         im1 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_000139.jpg'))
         im2 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_455157.jpg'))
@@ -38,7 +38,7 @@ class TestRetina(unittest.TestCase):
     # irl_det_4 = "17_Ceremony_Ceremony_17_171.jpg"
 
     def test_mobilenet(self):
-        model = Detector('RetinaFace', 'Biubug6_MobileNet')
+        model = Detector(detmodels.RetinaFace_Biubug6_MobileNet)
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [1, 2, 3, 4]]
         b, s = model(imgs)
@@ -58,7 +58,7 @@ class TestRetina(unittest.TestCase):
         np.testing.assert_almost_equal(rb[3][-5], np.array([621.6558, 4.7005, 637.6158, 27.7780, 0.0208]), decimal=4)
 
     def test_resnet50_A(self):
-        model = RetinaDetector('face_biubug6_resnet50')
+        model = Detector(detmodels.RetinaFace_Biubug6_ResNet50)
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [1, 2]]
         b, s = model(imgs)
@@ -70,7 +70,7 @@ class TestRetina(unittest.TestCase):
         np.testing.assert_almost_equal(rb[1][1], np.array([81.9536, 199.9863, 172.0615, 331.8756, 0.99976426]), decimal=4)
 
     def test_resnet50_B(self):
-        model = RetinaDetector('face_bbt_resnet50_mixed')
+        model = Detector(detmodels.RetinaFace_BBT_ResNet50_Mixed)
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [3, 4]]
         b, s = model(imgs)
@@ -81,7 +81,7 @@ class TestRetina(unittest.TestCase):
         np.testing.assert_almost_equal(rb[1][6], np.array([398.3162, 309.1897, 479.2617, 406.1430, 0.8273]), decimal=4)
 
     def test_resnet152(self):
-        model = RetinaDetector('face_bbt_resnet152_mixed')
+        model = Detector(detmodels.RetinaFace_BBT_ResNet152_Mixed)
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [3, 4]]
         b, s = model(imgs)

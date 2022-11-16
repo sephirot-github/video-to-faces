@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torchvision.ops import batched_nms
 
 from ..utils import prep_weights_file
+from ..utils.weights import load_weights
 
 # adapted from: https://github.com/open-mmlab/mmdetection
 # https://github.com/open-mmlab/mmdetection/blob/master/mmdet/models/dense_heads/yolo_head.py
@@ -134,7 +135,16 @@ class YOLOv3Head(nn.Module):
 
 class YOLOv3(nn.Module):
 
-    def __init__(self, img_size=608, num_classes=1, extra_thr=None):
+    links = {
+        'anime': 'https://github.com/hysts/anime-face-detector/'\
+                 'releases/download/v0.0.1/mmdet_anime-face_yolov3.pth',
+        'wider': '1pjg1_IeAuzgRzZiY92r71uzd_amfcegu',
+        'coco': 'https://download.openmmlab.com/mmdetection/v2.0/yolo/'\
+                'yolov3_d53_mstrain-608_273e_coco/'\
+                'yolov3_d53_mstrain-608_273e_coco_20210518_115020-a2c3acb8.pth'
+    }
+
+    def __init__(self, pretrained=None, device='cpu', img_size=608, num_classes=1, extra_thr=None):
         super().__init__()
         self.img_size = img_size
         self.num_classes = num_classes
@@ -142,6 +152,8 @@ class YOLOv3(nn.Module):
         self.backbone = Darknet53()
         self.neck = YOLOv3Neck()
         self.bbox_head = YOLOv3Head(num_classes)
+        if pretrained:
+            load_weights(self, self.links[pretrained], pretrained, device, sub='state_dict')
   
     def _preprocess(self, imgs, img_size):
         h, w = imgs[0].shape[:2]

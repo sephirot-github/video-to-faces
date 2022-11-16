@@ -20,12 +20,14 @@ def prep_weights_file(url, fn, gdrive=False):
     return dst
 
 
-def load_weights(model, link, suffix, device, extra_conversion=None, add_num_batches=False):
+def load_weights(model, link, suffix, device, sub=None, extra_conversion=None, add_num_batches=False):
     """"""
     link = link if '://' in link else 'https://drive.google.com/uc?id=%s' % link
     fn = '%s_%s.pt' % (model.__class__.__name__.lower(), suffix)
     wf = prep_weights_file(link, fn)
     wd_src = torch.load(wf, map_location=torch.device(device))
+    if sub:
+        wd_src = wd_src[sub]
     if extra_conversion:
         wd_src = extra_conversion(wd_src)
     wd_dst = {}

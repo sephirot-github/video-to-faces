@@ -184,9 +184,9 @@ class RetinaFace_Biubug6(nn.Module):
 
 class RetinaFace_BBT(nn.Module):
 
-    def __init__(self, pretrained='resnet50_wider', device='cpu', resnet50=True):
+    def __init__(self, resnet50=True, pretrained='resnet50_wider', device='cpu'):
         super().__init__()
-        backbone = ResNet50() if pretrained.startswith('resnet50') else ResNet152()
+        backbone = ResNet50() if resnet50 else ResNet152()
         cins = [256, 512, 1024, 2048]
         cout = 256
         relu='plain'
@@ -200,8 +200,7 @@ class RetinaFace_BBT(nn.Module):
         self.heads_boxes = nn.ModuleList([Head(cout, num_anchors, 4) for _ in range(len(cins) + 1)])
         self.to(device)
         if pretrained:
-            fn = 'retina_face_bbt_%s.pth' % pretrained
-            load_weights(self, self.links[pretrained], fn, device, self.conversion)
+            load_weights(self, self.links[pretrained], pretrained, device, self.conversion)
     
     def forward(self, imgs):
         dv = next(self.parameters()).device
@@ -243,6 +242,8 @@ class RetinaFace_BBT(nn.Module):
 
 class RetinaNet_TorchVision(nn.Module):
 
+    link = 'https://download.pytorch.org/models/retinanet_resnet50_fpn_coco-eeacb38b.pth'
+
     def __init__(self, pretrained=True, device='cpu'):
         super().__init__()
         backbone = ResNet50(return_count=3, bn_eps=0.0)
@@ -256,9 +257,7 @@ class RetinaNet_TorchVision(nn.Module):
         self.reg_head = HeadShared(cout, anchors_per_level, 4)
         self.to(device)
         if pretrained:
-            link = 'https://download.pytorch.org/models/retinanet_resnet50_fpn_coco-eeacb38b.pth'
-            fn = 'retina_net_torchvision_resnet50_coco.pth'
-            load_weights(self, link, fn, device, add_num_batches=True)
+            load_weights(self, self.link, 'resnet50_coco', device, add_num_batches=True)
     
     def forward(self, imgs, score_thr=0.05, iou_thr=0.5, post_impl='vectorized'):
         dv = next(self.parameters()).device
