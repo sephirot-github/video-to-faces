@@ -2,6 +2,7 @@ from enum import Enum, auto
 
 import torch
 
+from .rcnn import FasterRCNN
 from .retina import RetinaNet_TorchVision, RetinaFace_Biubug6, RetinaFace_BBT
 from .yolo import YOLOv3
 
@@ -18,14 +19,17 @@ class Detector():
 
         print('Initializing %s model for object detection' % architecture)
 
-        if architecture == 'RetinaNet':
+        if architecture == 'FasterRCNN':
+            self.model = FasterRCNN(dv)
+        elif architecture == 'RetinaNet':
             self.model = RetinaNet_TorchVision(dv)
         elif architecture == 'RetinaFace':
-            source, variation = modelnum.name.lower().split('_')[1:]
+            parts = modelnum.name.lower().split('_')
+            source, variation = parts[1:3]
             if source == 'biubug6':
                 self.model = RetinaFace_Biubug6(variation == 'mobilenet', variation, dv)
             elif source == 'bbt':
-                self.model = RetinaFace_BBT(variation == 'resnet50', variation, dv)
+                self.model = RetinaFace_BBT(variation == 'resnet50', '_'.join(parts[-2:]), dv)
         elif architecture == 'YOLOv3':
             dataset = modelnum.name.lower().split('_')[1]
             n = 80 if dataset == 'coco' else 1
@@ -39,6 +43,7 @@ class Detector():
 
 
 class detmodels(Enum):
+    FasterRCNN = auto()
     RetinaNet = auto()
     RetinaFace_Biubug6_MobileNet = auto()
     RetinaFace_Biubug6_ResNet50 = auto()

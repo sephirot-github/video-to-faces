@@ -6,88 +6,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .operations import prep, post
+from .components.fpn import FPN
 from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV1
 from ..backbones.resnet import ResNet50, ResNet152
 from ..utils.weights import load_weights
-from .operations import prep, post
 
 # Source 1: https://github.com/biubug6/Pytorch_Retinaface
 # Source 2: https://github.com/barisbatuhan/FaceDetector
 # Paper: https://arxiv.org/pdf/1905.00641.pdf
-
-
-class FPN(nn.Module):
-    """
-    FPN paper (section 3 and figure 3) https://arxiv.org/pdf/1612.03144.pdf
-    RetinaNet paper (page 4 footnote 2) https://arxiv.org/pdf/1708.02002.pdf
-    RetinaFace paper (start of section 4.2) https://arxiv.org/pdf/1905.00641.pdf
-
-    example: https://github.com/kuangliu/pytorch-fpn/blob/master/fpn.py
-    tvision: https://github.com/pytorch/vision/blob/main/torchvision/ops/feature_pyramid_network.py
-
-    ResNet outputs: C2, C3, C4, C5 ({4, 8, 16, 32} stride w.r.t. the input image)
-        
-    Ti = lateral(Ci) [i=2..5]
-    P5 = T5
-    P4 = T4 + upsample(P5)
-    P3 = T3 + upsample(P4)
-    P2 = T2 + upsample(P2)
-    Pi = smooth(Pi) [i=2..4] (or 5 too)
-
-    P6 = extra1(C5) [or P5]
-    P7 = extra2(relu(P6))
-
-    smoothP5 is probably a mistake, but both torchvision and detectron2 implementations seem to be using it
-    from the paper, same paragraph: "which is to reduce the aliasing effect of upsampling" (but P5 have no upsampling)
-    """
-
-    def __init__(self, cins, cout, relu, bn=1e-05, P6=None, P7=None,
-                 smoothP5=False, smoothBeforeMerge=False, nonCumulative=False):
-        super().__init__()
-        assert P6 in ['fromC5', 'fromP5', None]
-        self.P6 = P6
-        self.P7 = P7
-        self.smoothBeforeMerge = smoothBeforeMerge
-        self.nonCumulative = nonCumulative
-        smooth_n = len(cins) - (0 if smoothP5 else 1)
-        self.conv_laterals = nn.ModuleList([ConvUnit(cin, cout, 1, 1, 0, relu, bn) for cin in cins])
-        self.conv_smooths = nn.ModuleList([ConvUnit(cout, cout, 3, 1, 1, relu, bn) for _ in range(smooth_n)])
-        if P6:
-            cin6 = cins[-1] if P6 == 'fromC5' else cout
-            self.conv_extra1 = ConvUnit(cin6, cout, 3, 2, 1, relu, bn)
-        if P7:
-            self.conv_extra2 = ConvUnit(cout, cout, 3, 2, 1, relu, bn)
-
-    def forward(self, C):
-        n = len(C)
-        P = [self.conv_laterals[i](C[i]) for i in range(n)]
-        
-        if self.nonCumulative:
-            # mistake from: https://github.com/barisbatuhan/FaceDetector/blob/main/BBTNet/components/fpn.py
-            P = [P[i] + F.interpolate(P[i + 1], size=P[i].shape[2:], mode='nearest') for i in range(len(P) - 1)] + [P[-1]]
-            for i in range(len(self.conv_smooths)):
-                P[i] = self.conv_smooths[i](P[i])
-        elif self.smoothBeforeMerge:
-            # mistake from: https://github.com/biubug6/Pytorch_Retinaface/blob/master/models/net.py
-            # from the paper: "Finally, we append a 3×3 convolution on each merged map"
-            # P5 is never smoothed here (smoothP5 is ignored)
-            for i in range(n - 1)[::-1]:
-                P[i] += F.interpolate(P[i + 1], size=P[i].shape[2:], mode='nearest')
-                P[i] = self.conv_smooths[i](P[i])
-        else:
-            # normal pathway
-            for i in range(n - 1)[::-1]:
-                P[i] += F.interpolate(P[i + 1], size=P[i].shape[2:], mode='nearest')
-            for i in range(len(self.conv_smooths)):
-                P[i] = self.conv_smooths[i](P[i])
-        
-        if self.P6:
-            P.append(self.conv_extra1(C[-1] if self.P6 == 'fromC5' else P[-1]))
-        if self.P7:
-            P.append(self.conv_extra2(F.relu(P[-1])))
-
-        return P
 
 
 class SSH(nn.Module):
@@ -281,15 +209,6 @@ class RetinaNet_TorchVision(nn.Module):
         return boxes, scores, classes
 
     def get_bases(self):
-        # equivalent to:
-        #strides = [8, 16, 32, 64, 128]
-        #anchors = post.make_anchors([32, 64, 128, 256, 512], [1, 2**(1/3), 2**(2/3)], [2, 1, 0.5])
-        #return list(zip(strides, anchors))
-        # but due to some rounding of intermediate results, torchvision's code ends up with sligthly different numbers
-        return [
-            (8,   [(46, 22), (56, 28), (70, 36),        (32, 32), (40, 40), (50, 50),       (22, 46), (28, 56), (36, 70)]),
-            (16,  [(90, 46), (114, 56), (142, 72),      (64, 64), (80, 80), (100, 100),     (46, 90), (56, 114), (72, 142)]),
-            (32,  [(182, 90), (228, 114), (288, 144),   (128, 128), (160, 160), (204, 204), (90, 182), (114, 228), (144, 288)]),
-            (64,  [(362, 182), (456, 228), (574, 288),  (256, 256), (322, 322), (406, 406), (182, 362), (228, 456), (288, 574)]),
-            (128, [(724, 362), (912, 456), (1148, 574), (512, 512), (644, 644), (812, 812), (362, 724), (456, 912), (574, 1148)])
-        ]
+        strides = [8, 16, 32, 64, 128]
+        anchors = post.make_anchors_rounded([32, 64, 128, 256, 512], [1, 2**(1/3), 2**(2/3)], [2, 1, 0.5])
+        return list(zip(strides, anchors))

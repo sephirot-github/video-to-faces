@@ -177,6 +177,18 @@ def make_anchors(dims, scales=[1], ratios=[1]):
     return anchors
 
 
+def make_anchors_rounded(dims, scales, ratios):
+    """Same as make_anchors but with two intermediate roundings to replicate TorchVision code:
+    https://github.com/pytorch/vision/blob/main/torchvision/models/detection/anchor_utils.py#L58
+    https://github.com/pytorch/vision/blob/main/torchvision/models/detection/retinanet.py#L51
+    """
+    mult = [math.sqrt(ar) for ar in ratios]
+    dims_scaled = [[int(d * s) for s in scales] for d in dims]
+    anchors = [[(int(d * s) * m, int(d * s) / m) for m in mult for s in scales] for d in dims]
+    anchors = [[(round(w / 2) * 2, round(h / 2) * 2) for (w, h) in group] for group in anchors]
+    return anchors
+
+
 def get_priors(img_size, bases, dv='cpu', loc='center', patches='as_is'):
     """For every (stride, anchors) pair in ``bases`` list, walk through every stride-sized
     square patch of ``img_size`` canvas left-right, top-bottom and return anchors-sized boxes
