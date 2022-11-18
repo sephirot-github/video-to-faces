@@ -107,6 +107,7 @@ class RetinaFace_Biubug6(nn.Module):
         scr = F.softmax(cls, dim=-1)[:, :, 1]
         priors = post.get_priors(x.shape[2:], self.bases, dv, loc='center')
         b, s, _ = post.get_results(reg, scr, priors, 0.02, 0.4, decode=(0.1, 0.2))
+        b, s = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s]]
         return b, s
 
 
@@ -144,6 +145,7 @@ class RetinaFace_BBT(nn.Module):
         scr = F.softmax(cls, dim=-1)[:, :, 1]
         priors = post.get_priors(x.shape[2:], self.bases, dv, loc='center')
         b, s, _ = post.get_results(reg, scr, priors, 0.5, 0.4, decode=(0.1, 0.2))
+        b, s = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s]]
         return b, s
 
     links = {
@@ -202,11 +204,12 @@ class RetinaNet_TorchVision(nn.Module):
         scr = torch.cat(log, axis=1).sigmoid_()
 
         priors = post.get_priors(x.shape[2:], self.get_bases(), dv, loc='corner', patches='fit')
-        boxes, scores, classes = post.get_results(
+        b, s, c = post.get_results(
             reg, scr, priors, score_thr, iou_thr, decode=(1, 1, math.log(1000 / 16)),
             lvtop=1000, lvsizes=lsz, multiclassbox=True, imtop=300, implementation=post_impl,
             scale=True, clamp=True, sizes_used=sz_used, sizes_orig=sz_orig)
-        return boxes, scores, classes
+        b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
+        return b, s, c
 
     def get_bases(self):
         strides = [8, 16, 32, 64, 128]
