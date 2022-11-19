@@ -52,7 +52,7 @@ class FasterRCNN(nn.Module):
             wd.pop(n)
         return wd
 
-    def forward(self, imgs):
+    def forward(self, imgs, post_impl='vectorized'):
         dv = next(self.parameters()).device
         ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
         ts, sz_orig, sz_used = prep.resize(ts, resize_min=800, resize_max=1333)
@@ -66,18 +66,13 @@ class FasterRCNN(nn.Module):
         obj = torch.cat(log, axis=1).sigmoid_()
 
         priors = post.get_priors(x.shape[2:], self.get_bases(), dv, loc='corner', patches='fit')
-        b, s = [], []
-        for i in range(len(imgs)):
-            idx, scores, _ = post.select_by_score(obj[i], 0, False, (1000, lsz))
-            levels = torch.arange(len(lsz)).repeat_interleave(torch.tensor(lsz))[idx]
-            boxes = post.decode_boxes(reg[i][idx], priors[idx], settings=(1, 1, math.log(1000 / 16)))
-            boxes = post.clamp_to_canvas(boxes, sz_used[i])
-            mask = post.remove_small(boxes)
-            boxes, scores, levels = boxes[mask], scores[mask], levels[mask]
-            keep = post.do_nms(boxes, scores, levels, 0.7)[:1000]
-            b.append(boxes[keep])
-            s.append(scores[keep])
-        return b, s
+        b, _, _ = post.get_results(
+            reg, obj, priors, score_thr=0.00, lvtop=1000, lvsizes=lsz,
+            decode=(1, 1, math.log(1000 / 16)),
+            clamp=True, min_size=1e-3, sizes_used=sz_used,
+            iou_thr=0.7, imtop=1000, nms_per_level=True,
+            implementation=post_impl)
+        return b
 
     def get_bases(self):
         strides = [4, 8, 16, 32, 64]

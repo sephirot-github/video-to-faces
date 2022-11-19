@@ -79,11 +79,34 @@ def remove_small(min_size, boxes, *args):
     return [boxes, *args]
 
 
-#def remove_small(boxes, min_size):
-#    ws = boxes[:, 2] - boxes[:, 0]
-#    hs = boxes[:, 3] - boxes[:, 1]
-#    mask = (ws >= min_size) & (hs >= min_size)
-#    return mask
+def get_lvidx(idx, lvsizes):
+    """
+    dim = 8000
+    lsz = [3500, 2500, 1000, 600, 400]
+    idx = torch.tensor([0, 5999, 6000, 7999, 8000, 15000, 20000])
+
+    res = tensor([0, 1, 2, 4, 0, 3, 1])
+    cumsum = tensor([3500, 6000, 7000, 7600, 8000])
+    idx % dim = tensor([   0, 5999, 6000, 7999,    0, 7000, 4000])
+    """
+    boundaries = torch.tensor(lvsizes).cumsum(0)
+    return torch.bucketize(idx, boundaries, right=True)
+    #return torch.gt(boundaries, idx[:, None]).to(dtype=int).argmax(dim=1)
+
+
+def get_nms_groups(idx, classes, per_level, lvsizes, imidx=None):
+    if imidx is None and not per_level and classes is None:
+        return None
+    groups = torch.zeros_like(idx)
+    if imidx is not None:
+        groups += imidx
+    if per_level:
+        groups *= 10
+        groups += get_lvidx(idx, lvsizes)
+    if classes is not None:
+        groups *= 1000
+        groups += classes
+    return groups
 
 
 def get_results(reg, scr, priors, score_thr, iou_thr, decode, lvtop=None, lvsizes=None,
@@ -94,12 +117,9 @@ def get_results(reg, scr, priors, score_thr, iou_thr, decode, lvtop=None, lvsize
     assert implementation in ['vectorized', 'loop']
     if scr.ndim == 2:
         scr = scr.unsqueeze(-1)
-    if nms_per_level:
-        lvidx = torch.arange(len(lvsizes)).repeat_interleave(torch.tensor(lvsizes))
-    else:
-        lvidx = None
     
     if implementation == 'loop':
+        print('loop hello')
         res = []
         for i in range(reg.shape[0]):
             idx, scores, classes = select_by_score(scr[i], score_thr, multiclassbox, (lvtop, lvsizes))
@@ -107,9 +127,11 @@ def get_results(reg, scr, priors, score_thr, iou_thr, decode, lvtop=None, lvsize
             if clamp:
                 boxes = clamp_to_canvas(boxes, sizes_used[i])
             if min_size:
-                boxes, scores, classes, lvidx = remove_small(min_size, boxes, scores, classes, lvidx[idx])
-            keep = do_nms(boxes, scores, classes, iou_thr)[:imtop]
-            b, s, c = boxes[keep], scores[keep], classes[keep] if classes is not None else None
+                boxes, scores, classes, idx = remove_small(min_size, boxes, scores, classes, idx)
+            g = get_nms_groups(idx, classes, nms_per_level, lvsizes)
+            keep = do_nms(boxes, scores, g, iou_thr)[:imtop]
+            b, s = boxes[keep], scores[keep]
+            c = None if (classes is None) else classes[keep]
             if scale:
                 b = scale_back(b, sizes_orig[i], sizes_used[i])
             res.append((b, s, c))
@@ -117,30 +139,25 @@ def get_results(reg, scr, priors, score_thr, iou_thr, decode, lvtop=None, lvsize
         return bl, sl, cl
              
     if implementation == 'vectorized':
+        print('vect hello')
         n, dim = reg.shape[:2]
         reg = reg.reshape(-1, reg.shape[-1])
         scr = scr.reshape(-1, scr.shape[-1])
         idx, scores, classes = select_by_score(scr, score_thr, multiclassbox, (lvtop, lvsizes, n))
-        imidx = idx.div(dim, rounding_mode='floor')
-        grpidx = imidx if not nms_per_level else imidx * 10 + lvidx[idx % dim]
+        imidx = idx.div(dim, rounding_mode='floor') # == idx // dim
         boxes = decode_boxes(reg[idx], priors[idx % dim], settings=decode)
         if clamp:
             boxes = clamp_to_canvas_vect(boxes, sizes_used, imidx)
         if min_size:
-            boxes, scores, classes, imidx, grpidx = remove_small(min_size, boxes, scores, classes, imidx, grpidx)
-        if classes is None:
-            keep = do_nms(boxes, scores, grpidx, iou_thr)
-            boxes, scores, imidx = [x[keep] for x in [boxes, scores, imidx]]
-            cl = None
-        else:
-            groups = grpidx * 1000 + classes
-            keep = do_nms(boxes, scores, groups, iou_thr)
-            boxes, scores, classes, imidx = [x[keep] for x in [boxes, scores, classes, imidx]]
-            cl = [classes[imidx == i][:imtop] for i in range(n)]
+            boxes, scores, classes, imidx, idx = remove_small(min_size, boxes, scores, classes, imidx, idx)
+        g = get_nms_groups(idx % dim, classes, nms_per_level, lvsizes, imidx)
+        keep = do_nms(boxes, scores, g, iou_thr)
+        boxes, scores, imidx = [x[keep] for x in [boxes, scores, imidx]]
         if scale:
             boxes = scale_back_vect(boxes, sizes_orig, sizes_used, imidx)
         bl = [boxes[imidx == i][:imtop] for i in range(n)]
         sl = [scores[imidx == i][:imtop] for i in range(n)]
+        cl = [classes[keep][imidx == i][:imtop] for i in range(n)] if (classes is not None) else None
         return bl, sl, cl
      
 

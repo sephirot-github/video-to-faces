@@ -14,7 +14,7 @@ class TestRetina(unittest.TestCase):
         testdir = osp.dirname(osp.realpath(__file__))
         im1 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_000139.jpg'))
         im2 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_455157.jpg'))
-        b, s, l = model([im1, im2])
+        b, s, l = model([im1, im2], post_impl='vectorized')
         self.assertEqual(len(b), 2)
         self.assertEqual(len(s), 2)
         self.assertEqual(len(l), 2)
@@ -30,6 +30,13 @@ class TestRetina(unittest.TestCase):
         np.testing.assert_almost_equal(s[1][5:10], np.array([0.3458, 0.3283, 0.3276, 0.3109, 0.3082]), decimal=4)
         np.testing.assert_equal(l[0][130:140], np.array([86, 63, 77, 67, 62, 1, 62, 67, 62, 76]))
         np.testing.assert_equal(l[1][10:25], np.array([67, 67, 15, 1, 15, 15, 67, 67, 67, 1, 28, 27, 84, 67, 67]))
+        b2, s2, l2 = model([im1, im2], post_impl='loop')
+        np.testing.assert_equal(b[0], b2[0])
+        np.testing.assert_equal(b[1], b2[1])
+        np.testing.assert_equal(s[0], s2[0])
+        np.testing.assert_equal(s[1], s2[1])
+        np.testing.assert_equal(l[0], l2[0])
+        np.testing.assert_equal(l[1], l2[1])
 
     # from WIDER_val:
     # irl_det_1 = "12_Group_Group_12_Group_Group_12_10.jpg"
