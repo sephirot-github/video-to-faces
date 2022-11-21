@@ -83,26 +83,45 @@ class FasterRCNN(nn.Module):
         
         xs = self.body(x)
         xs = self.feature_pyramid(xs)
-        reg, log = map(list, zip(*[self.head(lvl) for lvl in xs]))
-        lsz = [lvl.shape[1] for lvl in log]
+        
+        reg, log = [], []
+        for fmap in xs:
+            boxreg, logits = self.head(fmap)
+            logits, top = logits.topk(min(1000, logits.shape[1]), dim=1)
+            boxreg = boxreg.gather(1, top.expand(-1, -1, 4))
+            reg.append(boxreg)
+            log.append(logits)
         reg = torch.cat(reg, axis=1)
         obj = torch.cat(log, axis=1).sigmoid_()
         
-        # https://github.com/pytorch/vision/blob/main/torchvision/models/detection/rpn.py#L241
-        priors = post.get_priors(x.shape[2:], self.bases, dv, loc='corner', patches='fit')
-        proposals, _, _ = post.get_results(
-            reg, obj, priors, score_thr=0.00, lvtop=1000, lvsizes=lsz, decode=self.decode_set,
-            clamp=True, min_size=1e-3, sizes_used=sz_used,
-            iou_thr=0.7, imtop=1000, nms_per_level=True,
-            implementation=post_impl)
-        
-        x = roi_align_fpn(proposals, xs[:-1], self.strides[:-1])
-        x = self.roi_head1(x)
-        reg, log = self.roi_head2(x)
+        n, dim = reg.shape[:2]
+        reg, obj = reg.reshape(-1, 4), obj.flatten()
+        idx = torch.nonzero(obj >= 0.00).squeeze()
+        obj = obj[idx]
 
-        lbl = torch.arange(self.num_classes, device=dv).view(1, -1).expand_as(log)[:, 1:]
-        rrr = reg.reshape(reg.shape[0], -1, 4)[:, 1:, :]
-        scr = F.softmax(log, dim=-1)[:, 1:]
+        priors = post.get_priors(x.shape[2:], self.bases, dv, loc='corner', patches='fit')
+        boxes = post.decode_boxes(reg[idx], priors[idx % dim], settings=self.decode_set)
+
+        #reg, log = map(list, zip(*[self.head(lvl) for lvl in xs]))
+        #lsz = [lvl.shape[1] for lvl in log]
+        #reg = torch.cat(reg, axis=1)
+        #obj = torch.cat(log, axis=1).sigmoid_()
+        
+        # https://github.com/pytorch/vision/blob/main/torchvision/models/detection/rpn.py#L241
+        #priors = post.get_priors(x.shape[2:], self.bases, dv, loc='corner', patches='fit')
+        #proposals, _, _ = post.get_results(
+        #    reg, obj, priors, score_thr=0.00, lvtop=1000, lvsizes=lsz, decode=self.decode_set,
+        #    clamp=True, min_size=1e-3, sizes_used=sz_used,
+        #    iou_thr=0.7, imtop=1000, nms_per_level=True,
+        #    implementation=post_impl)
+        
+        #x = roi_align_fpn(proposals, xs[:-1], self.strides[:-1])
+        #x = self.roi_head1(x)
+        #reg, log = self.roi_head2(x)
+
+        #lbl = torch.arange(self.num_classes, device=dv).view(1, -1).expand_as(log)[:, 1:]
+        #rrr = reg.reshape(reg.shape[0], -1, 4)[:, 1:, :]
+        #scr = F.softmax(log, dim=-1)[:, 1:]
         # torch.Size([2000, 90, 4]) torch.Size([2000, 90])
 
         #imlen = [len(p) for p in proposals]
@@ -117,7 +136,7 @@ class FasterRCNN(nn.Module):
         #    implementation='loop'
         #)
 
-        return reg, log
+        return
 
 
 def assign_fpn_levels(boxes, strides):
