@@ -55,8 +55,8 @@ def scale_back(boxes, size_orig, size_used):
     return boxes
 
 
-def clamp_to_canvas_vect(boxes, sizes_used, imidx):
-    mx = torch.tensor(sizes_used).flip(1).repeat(1, 2)[imidx, :]
+def clamp_to_canvas_vect(boxes, imsizes, imidx):
+    mx = torch.tensor(imsizes).flip(1).repeat(1, 2)[imidx, :]
     boxes.clamp_(min=torch.tensor(0), max=mx)
     return boxes
 
@@ -69,10 +69,11 @@ def scale_back_vect(boxes, sizes_orig, sizes_used, imidx):
     return boxes
 
 
-def remove_small(min_size, boxes, *args):
+def remove_small(boxes, min_size, *args):
     ws = boxes[:, 2] - boxes[:, 0]
     hs = boxes[:, 3] - boxes[:, 1]
     mask = (ws >= min_size) & (hs >= min_size)
+    #keep = (boxes[:, 2:] - boxes[:, :2] >= min_size).all(dim=1)
     if torch.count_nonzero(mask) < boxes.shape[0]:
         boxes = boxes[mask]
         args = [t[mask] if (t is not None) else None for t in args]
@@ -127,7 +128,7 @@ def get_results(reg, scr, priors, score_thr, iou_thr, decode, lvtop=None, lvsize
             if clamp:
                 boxes = clamp_to_canvas(boxes, sizes_used[i])
             if min_size:
-                boxes, scores, classes, idx = remove_small(min_size, boxes, scores, classes, idx)
+                boxes, scores, classes, idx = remove_small(boxes, min_size, scores, classes, idx)
             g = get_nms_groups(idx, classes, nms_per_level, lvsizes)
             keep = do_nms(boxes, scores, g, iou_thr)[:imtop]
             b, s = boxes[keep], scores[keep]
@@ -146,10 +147,11 @@ def get_results(reg, scr, priors, score_thr, iou_thr, decode, lvtop=None, lvsize
         idx, scores, classes = select_by_score(scr, score_thr, multiclassbox, (lvtop, lvsizes, n))
         imidx = idx.div(dim, rounding_mode='floor') # == idx // dim
         boxes = decode_boxes(reg[idx], priors[idx % dim], settings=decode)
+        print(boxes.shape, boxes[:5])
         if clamp:
             boxes = clamp_to_canvas_vect(boxes, sizes_used, imidx)
         if min_size:
-            boxes, scores, classes, imidx, idx = remove_small(min_size, boxes, scores, classes, imidx, idx)
+            boxes, scores, classes, imidx, idx = remove_small(boxes, min_size, scores, classes, imidx, idx)
         g = get_nms_groups(idx % dim, classes, nms_per_level, lvsizes, imidx)
         keep = do_nms(boxes, scores, g, iou_thr)
         boxes, scores, imidx = [x[keep] for x in [boxes, scores, imidx]]
@@ -230,7 +232,7 @@ def make_anchors_rounded(dims, scales, ratios):
     return anchors
 
 
-def get_priors(img_size, bases, dv='cpu', loc='center', patches='as_is'):
+def get_priors(img_size, bases, dv='cpu', loc='center', patches='as_is', concat=True):
     """For every (stride, anchors) pair in ``bases`` list, walk through every stride-sized
     square patch of ``img_size`` canvas left-right, top-bottom and return anchors-sized boxes
     drawn around each patch's center in a form of (center_x, center_y, width, height).
@@ -272,6 +274,8 @@ def get_priors(img_size, bases, dv='cpu', loc='center', patches='as_is'):
         c = c.repeat_interleave(len(anchors), dim=0)
         s = torch.tensor(anchors, device=dv).repeat(nx*ny, 1)
         p.append(torch.hstack([c, s]))
+    if not concat:
+        return p
     return torch.cat(p)
 
 
@@ -287,8 +291,8 @@ def decode_boxes(pred, priors, settings):
     """
     mult_xy, mult_wh = settings[:2]
     max_exp_input = None if len(settings) < 3 else settings[2]
-    xys = priors[:, 2:] * mult_xy * pred[..., :2] + priors[:, :2]
-    whs = priors[:, 2:] * exp_clamped(mult_wh * pred[..., 2:], max_exp_input)
+    xys = priors[..., 2:] * mult_xy * pred[..., :2] + priors[..., :2]
+    whs = priors[..., 2:] * exp_clamped(mult_wh * pred[..., 2:], max_exp_input)
     boxes = torch.cat([xys - whs / 2, xys + whs / 2], dim=-1)
     return boxes
 
