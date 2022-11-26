@@ -1,4 +1,3 @@
-from ctypes import wstring_at
 import math
 import sys
 
@@ -120,7 +119,6 @@ def get_results(reg, scr, priors, score_thr, iou_thr, decode, lvtop=None, lvsize
         scr = scr.unsqueeze(-1)
     
     if implementation == 'loop':
-        print('loop hello')
         res = []
         for i in range(reg.shape[0]):
             idx, scores, classes = select_by_score(scr[i], score_thr, multiclassbox, (lvtop, lvsizes))
@@ -140,14 +138,12 @@ def get_results(reg, scr, priors, score_thr, iou_thr, decode, lvtop=None, lvsize
         return bl, sl, cl
              
     if implementation == 'vectorized':
-        print('vect hello')
         n, dim = reg.shape[:2]
         reg = reg.reshape(-1, reg.shape[-1])
         scr = scr.reshape(-1, scr.shape[-1])
         idx, scores, classes = select_by_score(scr, score_thr, multiclassbox, (lvtop, lvsizes, n))
         imidx = idx.div(dim, rounding_mode='floor') # == idx // dim
         boxes = decode_boxes(reg[idx], priors[idx % dim], settings=decode)
-        print(boxes.shape, boxes[:5])
         if clamp:
             boxes = clamp_to_canvas_vect(boxes, sizes_used, imidx)
         if min_size:
@@ -277,6 +273,13 @@ def get_priors(img_size, bases, dv='cpu', loc='center', patches='as_is', concat=
     if not concat:
         return p
     return torch.cat(p)
+
+
+def convert_to_cwh(boxes):
+    """from (x1, y1, x2, y2) to (cx, cy, w, h)"""
+    boxes[..., 2:] -= boxes[..., :2]
+    boxes[..., :2] += boxes[..., 2:] * 0.5
+    return boxes
 
 
 def decode_boxes(pred, priors, settings):

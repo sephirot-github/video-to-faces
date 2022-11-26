@@ -153,7 +153,8 @@ class YOLOv3(nn.Module):
         self.neck = YOLOv3Neck()
         self.bbox_head = YOLOv3Head(num_classes)
         if pretrained:
-            load_weights(self, self.links[pretrained], pretrained, device, sub='state_dict')
+            sub = None if pretrained == 'wider' else 'state_dict'
+            load_weights(self, self.links[pretrained], pretrained, device, sub=sub)
   
     def _preprocess(self, imgs, img_size):
         h, w = imgs[0].shape[:2]

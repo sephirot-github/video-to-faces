@@ -4,13 +4,13 @@ import unittest
 import cv2
 import numpy as np
 
-from videotofaces import YOLOv3Detector, YOLOv3DetectorAnime
+from videotofaces import Detector, detmodels
 
 
 class TestYOLOv3(unittest.TestCase):
 
     def test_anime(self):
-        model = YOLOv3DetectorAnime('cpu')
+        model = Detector(detmodels.YOLOv3_Anime)
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'anime_det_%u.jpg' % i)) for i in [1, 2, 3, 4]]
         res = model(imgs)
@@ -26,7 +26,7 @@ class TestYOLOv3(unittest.TestCase):
         return
 
     def test_irl(self):
-        model = YOLOv3Detector('cpu')
+        model = Detector(detmodels.YOLOv3_Wider)
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [1, 2, 3, 4]]
         res = model(imgs)

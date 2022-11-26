@@ -74,8 +74,7 @@ class RoIProcessingNetwork(nn.Module):
     def forward(self, proposals, imidx, fmaps, fmaps_strides, imsizes, score_thr, iou_thr, imtop, min_size):
         roi_maps = post.roi_align_multilevel(proposals, imidx, fmaps, fmaps_strides)
         reg, log = self.heads(roi_maps)
-        reg1, log1 = reg.clone(), log.clone()
-        
+       
         reg = reg.reshape(reg.shape[0], -1, 4)[:, 1:, :]
         scr = F.softmax(log, dim=-1)[:, 1:]
         cls = torch.arange(log.shape[1], device=log.device).view(1, -1).expand_as(log)[:, 1:]
@@ -83,26 +82,35 @@ class RoIProcessingNetwork(nn.Module):
         n = torch.max(imidx).item() + 1
         dim = reg.shape[1]
         reg, scr, cls = reg.reshape(-1, 4), scr.flatten(), cls.flatten()
-        idx = torch.nonzero(scr >= score_thr).squeeze()
-        scr, cls = scr[idx], cls[idx]
-        imidx = imidx[idx.div(dim, rounding_mode='floor')]
+        fidx = torch.nonzero(scr > score_thr).squeeze()
+        reg, scr, cls = reg[fidx], scr[fidx], cls[fidx]
+        idx = fidx.div(dim, rounding_mode='floor')
+        proposals, imidx = proposals[idx], imidx[idx]
 
-        boxes = post.decode_boxes(reg[idx], proposals[idx % dim], settings=self.dec)
+        proposals = post.convert_to_cwh(proposals)
+        boxes = post.decode_boxes(reg, proposals, settings=self.dec)
         boxes = post.clamp_to_canvas_vect(boxes, imsizes, imidx)
         boxes, scr, cls, imidx = post.remove_small(boxes, min_size, scr, cls, imidx)
-        groups = imidx * 1000 + cls
-        keep = torchvision.ops.batched_nms(boxes, scr, groups, iou_thr)
-        keep = torch.cat([keep[imidx[keep] == i][:imtop] for i in range(n)])
-        boxes, scr, cls, imidx = [x[keep] for x in [boxes, scr, cls, imidx]]
-        boxes, scr, cls = [[x[imidx == i] for i in range(n)] for x in [boxes, scr, cls]]
-        return boxes, scr, cls, reg1, log1
-        # https://github.com/pytorch/vision/blob/main/torchvision/models/detection/roi_heads.py#L668
+        
+        res = []
+        for i in range(n):
+            bi, si, ci = [x[imidx == i] for x in [boxes, scr, cls]]
+            keep = torchvision.ops.batched_nms(bi, si, ci, iou_thr)[:imtop]
+            res.append((bi[keep], si[keep], ci[keep]))
+        return map(list, zip(*res))
+        #groups = imidx * 1000 + cls
+        #keep = torchvision.ops.batched_nms(boxes, scr, groups, iou_thr)
+        #keep = torch.cat([keep[imidx[keep] == i][:imtop] for i in range(n)])
+        #boxes, scr, cls, imidx = [x[keep] for x in [boxes, scr, cls, imidx]]
+        #boxes, scr, cls = [[x[imidx == i] for i in range(n)] for x in [boxes, scr, cls]]
+        #return boxes, scr, cls
         
 
 class FasterRCNN(nn.Module):
 
     links = {
-        '1': 'https://download.pytorch.org/models/fasterrcnn_resnet50_fpn_coco-258fb6c6.pth'
+        '1': 'https://download.pytorch.org/models/fasterrcnn_resnet50_fpn_coco-258fb6c6.pth',
+        '2': 'https://download.pytorch.org/models/fasterrcnn_resnet50_fpn_v2_coco-dd69338a.pth',
     }
 
     def __init__(self, pretrained=True, device='cpu'):
@@ -120,7 +128,7 @@ class FasterRCNN(nn.Module):
         self.body = backbone
         self.feature_pyramid = FPN(cins, cout, relu=None, bn=None, pool=True, smoothP5=True)
         self.rpn = RegionProposalNetwork(cout, 3, self.decode_set)
-        self.roi = RoIProcessingNetwork(cout * 7**2, 1024, self.num_classes, self.decode_set)
+        self.roi = RoIProcessingNetwork(cout * 7**2, 1024, self.num_classes, (0.1, 0.2, math.log(1000 / 16)))
                 
         self.to(device)
         if pretrained:
@@ -137,6 +145,12 @@ class FasterRCNN(nn.Module):
         xs = self.feature_pyramid(xs)
         proposals, imidx = self.rpn(xs, priors, sz_used, lvtop=1000, imtop=1000,
                                     score_thr=0.0, iou_thr=0.7, min_size=1e-3)
-        boxes, scores, classes, reg, log = self.roi(proposals, imidx, xs[:-1], self.strides[:-1], sz_used,
+        boxes, scores, classes = self.roi(proposals, imidx, xs[:-1], self.strides[:-1], sz_used,
                                           score_thr=0.05, iou_thr=0.5, imtop=100, min_size=1e-2)
-        return boxes, scores, classes, reg, log, [proposals[imidx == i] for i in range(len(imgs))]
+        
+        scalebacks = torch.tensor(sz_orig) / torch.tensor(sz_used)
+        scalebacks = scalebacks.flip(1).repeat(1, 2)
+        boxes = [boxes[i] * scalebacks[i] for i in range(len(imgs))]
+
+        b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [boxes, scores, classes]]
+        return b, s, c
