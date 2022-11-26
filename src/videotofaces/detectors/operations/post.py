@@ -302,3 +302,31 @@ def exp_clamped(x, max_=None):
         return torch.exp(x)
     else:
         return torch.exp(torch.clamp(x, max=max_))
+
+
+def assign_fpn_levels(boxes, strides):
+    """FPN Paper, Eq.1 https://arxiv.org/pdf/1612.03144.pdf"""
+    kmin = math.log2(strides[0])
+    kmax = math.log2(strides[-1])
+    ws = boxes[:, 2] - boxes[:, 0]
+    hs = boxes[:, 3] - boxes[:, 1]
+    k = 4 + torch.log2(torch.sqrt(ws * hs) / 224)
+    k = torch.clamp(k, min=kmin, max=kmax)
+    mapidx = (k - kmin).to(torch.int64)
+    return mapidx
+
+
+def roi_align_multilevel(boxes, imidx, fmaps, strides):
+    # https://arxiv.org/pdf/1703.06870.pdf
+    # https://github.com/pytorch/vision/issues/4935
+    # https://stackoverflow.com/questions/60060016/why-does-roi-align-not-seem-to-work-in-pytorch
+    # https://chao-ji.github.io/jekyll/update/2018/07/20/ROIAlign.html
+    mapidx = assign_fpn_levels(boxes, strides)
+    imboxes = torch.hstack([imidx.unsqueeze(-1), boxes])
+    roi_maps = torch.zeros((len(mapidx), fmaps[0].shape[1], 7, 7))
+    for level in range(len(strides)):
+        scale = 1 / strides[level]
+        idx = torch.nonzero(mapidx == level).squeeze()
+        roi = torchvision.ops.roi_align(fmaps[level], imboxes[idx], (7, 7), scale, 2, False)
+        roi_maps[idx] = roi.to(roi_maps.dtype)
+    return roi_maps

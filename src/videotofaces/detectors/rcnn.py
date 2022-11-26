@@ -53,28 +53,51 @@ class RegionProposalNetwork(nn.Module):
         return boxes[keep], imidx[keep]
 
 
-class TwoMLPHead(nn.Module):
-    def __init__(self, cin, cmid):
+class RoIProcessingNetwork(nn.Module):
+
+    def __init__(self, cin, cmid, num_classes, decode_settings):
         super().__init__()
         self.fc6 = nn.Linear(cin, cmid)
         self.fc7 = nn.Linear(cmid, cmid)
-    def forward(self, x):
+        self.cls = nn.Linear(cmid, num_classes)
+        self.reg = nn.Linear(cmid, num_classes * 4)
+        self.dec = decode_settings
+
+    def heads(self, x):
         x = x.flatten(start_dim=1)
         x = F.relu(self.fc6(x))
         x = F.relu(self.fc7(x))
-        return x
-
-
-class FastRCNNPredictor(nn.Module):
-    def __init__(self, cin, num_classes):
-        super().__init__()
-        self.cls = nn.Linear(cin, num_classes)
-        self.reg = nn.Linear(cin, num_classes * 4)
-    def forward(self, x):
         a = self.reg(x)
         b = self.cls(x)
         return a, b
+    
+    def forward(self, proposals, imidx, fmaps, fmaps_strides, imsizes, score_thr, iou_thr, imtop, min_size):
+        roi_maps = post.roi_align_multilevel(proposals, imidx, fmaps, fmaps_strides)
+        reg, log = self.heads(roi_maps)
+        reg1, log1 = reg.clone(), log.clone()
+        
+        reg = reg.reshape(reg.shape[0], -1, 4)[:, 1:, :]
+        scr = F.softmax(log, dim=-1)[:, 1:]
+        cls = torch.arange(log.shape[1], device=log.device).view(1, -1).expand_as(log)[:, 1:]
 
+        n = torch.max(imidx).item() + 1
+        dim = reg.shape[1]
+        reg, scr, cls = reg.reshape(-1, 4), scr.flatten(), cls.flatten()
+        idx = torch.nonzero(scr >= score_thr).squeeze()
+        scr, cls = scr[idx], cls[idx]
+        imidx = imidx[idx.div(dim, rounding_mode='floor')]
+
+        boxes = post.decode_boxes(reg[idx], proposals[idx % dim], settings=self.dec)
+        boxes = post.clamp_to_canvas_vect(boxes, imsizes, imidx)
+        boxes, scr, cls, imidx = post.remove_small(boxes, min_size, scr, cls, imidx)
+        groups = imidx * 1000 + cls
+        keep = torchvision.ops.batched_nms(boxes, scr, groups, iou_thr)
+        keep = torch.cat([keep[imidx[keep] == i][:imtop] for i in range(n)])
+        boxes, scr, cls, imidx = [x[keep] for x in [boxes, scr, cls, imidx]]
+        boxes, scr, cls = [[x[imidx == i] for i in range(n)] for x in [boxes, scr, cls]]
+        return boxes, scr, cls, reg1, log1
+        # https://github.com/pytorch/vision/blob/main/torchvision/models/detection/roi_heads.py#L668
+        
 
 class FasterRCNN(nn.Module):
 
@@ -97,9 +120,8 @@ class FasterRCNN(nn.Module):
         self.body = backbone
         self.feature_pyramid = FPN(cins, cout, relu=None, bn=None, pool=True, smoothP5=True)
         self.rpn = RegionProposalNetwork(cout, 3, self.decode_set)
-        self.roi_head1 = TwoMLPHead(cout * 7**2, 1024)
-        self.roi_head2 = FastRCNNPredictor(1024, self.num_classes)
-        
+        self.roi = RoIProcessingNetwork(cout * 7**2, 1024, self.num_classes, self.decode_set)
+                
         self.to(device)
         if pretrained:
             load_weights(self, self.links['1'], 'resnet50_coco', device, add_num_batches=True)
@@ -113,50 +135,8 @@ class FasterRCNN(nn.Module):
         priors = post.get_priors(x.shape[2:], self.bases, dv, 'corner', 'fit', concat=False)
         xs = self.body(x)
         xs = self.feature_pyramid(xs)
-        proposals, imidx = self.rpn(xs, priors, sz_used, lvtop=1000, imtop=1000, score_thr=0.0, iou_thr=0.7, min_size=1e-3)
-        roi_maps = roi_align_fpn(proposals, imidx, xs[:-1], self.strides[:-1])
-        return roi_maps
-        
-        #x = self.roi_head1(x)
-        #reg, log = self.roi_head2(x)
-
-        #lbl = torch.arange(self.num_classes, device=dv).view(1, -1).expand_as(log)[:, 1:]
-        #rrr = reg.reshape(reg.shape[0], -1, 4)[:, 1:, :]
-        #scr = F.softmax(log, dim=-1)[:, 1:]
-        # torch.Size([2000, 90, 4]) torch.Size([2000, 90])
-
-        # https://github.com/pytorch/vision/blob/main/torchvision/models/detection/roi_heads.py#L668
-        #b, s, c = post.get_results(
-        #    reg, log, proposals, score_thr=0.05, decode=self.decode_set,
-        #    clamp=True, min_size=1e-2, sizes_used=sz_used
-        #    iou_thr=0.5, imtop=100,
-        #    implementation='loop'
-        #)
-
-
-def assign_fpn_levels(boxes, strides):
-    """FPN Paper, Eq.1 https://arxiv.org/pdf/1612.03144.pdf"""
-    kmin = math.log2(strides[0])
-    kmax = math.log2(strides[-1])
-    ws = boxes[:, 2] - boxes[:, 0]
-    hs = boxes[:, 3] - boxes[:, 1]
-    k = 4 + torch.log2(torch.sqrt(ws * hs) / 224)
-    k = torch.clamp(k, min=kmin, max=kmax)
-    mapidx = (k - kmin).to(torch.int64)
-    return mapidx
-
-
-def roi_align_fpn(boxes, imidx, fmaps, strides):
-    # https://arxiv.org/pdf/1703.06870.pdf
-    # https://github.com/pytorch/vision/issues/4935
-    # https://stackoverflow.com/questions/60060016/why-does-roi-align-not-seem-to-work-in-pytorch
-    # https://chao-ji.github.io/jekyll/update/2018/07/20/ROIAlign.html
-    mapidx = assign_fpn_levels(boxes, strides)
-    imboxes = torch.hstack([imidx.unsqueeze(-1), boxes])
-    roi_maps = torch.zeros((len(mapidx), fmaps[0].shape[1], 7, 7))
-    for level in range(len(strides)):
-        scale = 1 / strides[level]
-        idx = torch.nonzero(mapidx == level).squeeze()
-        roi = torchvision.ops.roi_align(fmaps[level], imboxes[idx], (7, 7), scale, 2, False)
-        roi_maps[idx] = roi.to(roi_maps.dtype)
-    return roi_maps
+        proposals, imidx = self.rpn(xs, priors, sz_used, lvtop=1000, imtop=1000,
+                                    score_thr=0.0, iou_thr=0.7, min_size=1e-3)
+        boxes, scores, classes, reg, log = self.roi(proposals, imidx, xs[:-1], self.strides[:-1], sz_used,
+                                          score_thr=0.05, iou_thr=0.5, imtop=100, min_size=1e-2)
+        return boxes, scores, classes, reg, log, [proposals[imidx == i] for i in range(len(imgs))]
