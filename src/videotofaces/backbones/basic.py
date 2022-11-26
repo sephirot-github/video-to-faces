@@ -5,9 +5,9 @@ import torch.nn as nn
 class ConvUnit(nn.Module):
 
     def __init__(self, cin, cout, k, s, p, relu_type, bn=1e-05, grp=1):
-        super(ConvUnit, self).__init__()
-        cin, cout, grp = int(cin), int(cout), int(grp)
+        super().__init__()
 
+        cin, cout, grp = int(cin), int(cout), int(grp)
         self.conv = nn.Conv2d(cin, cout, k, s, p, groups=grp, bias=bn is None)
         
         if bn == None:
@@ -24,6 +24,8 @@ class ConvUnit(nn.Module):
         elif relu_type.startswith('lrelu'):
             leak = float(relu_type.split('_')[1])
             self.relu = nn.LeakyReLU(leak, inplace=True)
+        elif relu_type == 'hardswish':
+            self.relu = nn.Hardswish()
 
 
     def forward(self, x):
