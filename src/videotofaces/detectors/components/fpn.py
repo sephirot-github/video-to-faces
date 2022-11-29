@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from ...backbones.basic import ConvUnit
 
 
-class FPN(nn.Module):
+class FeaturePyramidNetwork(nn.Module):
     """
     FPN paper (section 3 and figure 3) https://arxiv.org/pdf/1612.03144.pdf
     RetinaNet paper (page 4 footnote 2) https://arxiv.org/pdf/1708.02002.pdf
@@ -30,7 +30,7 @@ class FPN(nn.Module):
     from the paper, same paragraph: "which is to reduce the aliasing effect of upsampling" (but P5 have no upsampling)
     """
 
-    def __init__(self, cins, cout, relu, bn=1e-05, P6=None, P7=None, pool=False,
+    def __init__(self, cins, cout, activ, bn=1e-05, P6=None, P7=None, pool=False,
                  smoothP5=False, smoothBeforeMerge=False, nonCumulative=False):
         super().__init__()
         assert P6 in ['fromC5', 'fromP5', None]
@@ -42,13 +42,13 @@ class FPN(nn.Module):
         self.smoothBeforeMerge = smoothBeforeMerge
         self.nonCumulative = nonCumulative
         smooth_n = len(cins) - (0 if smoothP5 else 1)
-        self.conv_laterals = nn.ModuleList([ConvUnit(cin, cout, 1, 1, 0, relu, bn) for cin in cins])
-        self.conv_smooths = nn.ModuleList([ConvUnit(cout, cout, 3, 1, 1, relu, bn) for _ in range(smooth_n)])
+        self.conv_laterals = nn.ModuleList([ConvUnit(cin, cout, 1, 1, 0, activ, bn) for cin in cins])
+        self.conv_smooths = nn.ModuleList([ConvUnit(cout, cout, 3, 1, 1, activ, bn) for _ in range(smooth_n)])
         if P6:
             cin6 = cins[-1] if P6 == 'fromC5' else cout
-            self.conv_extra1 = ConvUnit(cin6, cout, 3, 2, 1, relu, bn)
+            self.conv_extra1 = ConvUnit(cin6, cout, 3, 2, 1, activ, bn)
         if P7:
-            self.conv_extra2 = ConvUnit(cout, cout, 3, 2, 1, relu, bn)
+            self.conv_extra2 = ConvUnit(cout, cout, 3, 2, 1, activ, bn)
 
     def forward(self, C):
         n = len(C)

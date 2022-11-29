@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .operations import prep, post
-from .components.fpn import FPN
+from .components.fpn import FeaturePyramidNetwork
 from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV1
 from ..backbones.resnet import ResNet50, ResNet152
@@ -20,13 +20,13 @@ from ..utils.weights import load_weights
 
 class SSH(nn.Module):
 
-    def __init__(self, cin, cout, relu):
+    def __init__(self, cin, cout, activ):
         super().__init__()
-        self.conv1 = ConvUnit(cin, cout//2, 3, 1, 1, relu_type=None)
-        self.conv2 = ConvUnit(cin, cout//4, 3, 1, 1, relu_type=relu)
-        self.conv3 = ConvUnit(cout//4, cout//4, 3, 1, 1, relu_type=None)
-        self.conv4 = ConvUnit(cout//4, cout//4, 3, 1, 1, relu_type=relu)
-        self.conv5 = ConvUnit(cout//4, cout//4, 3, 1, 1, relu_type=None)
+        self.conv1 = ConvUnit(cin, cout//2, 3, 1, 1, activ=None)
+        self.conv2 = ConvUnit(cin, cout//4, 3, 1, 1, activ=activ)
+        self.conv3 = ConvUnit(cout//4, cout//4, 3, 1, 1, activ=None)
+        self.conv4 = ConvUnit(cout//4, cout//4, 3, 1, 1, activ=activ)
+        self.conv5 = ConvUnit(cout//4, cout//4, 3, 1, 1, activ=None)
 
     def forward(self, x):
         y1 = self.conv1(x)
@@ -56,7 +56,7 @@ class HeadShared(nn.Module):
     def __init__(self, c, num_anchors, task_len):
         super().__init__()
         self.task_len = task_len
-        self.conv = nn.Sequential(*[ConvUnit(c, c, 3, 1, 1, relu_type='plain', bn=None) for _ in range(4)])
+        self.conv = nn.Sequential(*[ConvUnit(c, c, 3, 1, 1, activ='relu', bn=None) for _ in range(4)])
         self.final = nn.Conv2d(c, num_anchors * task_len, kernel_size=3, padding=1)
     
     def forward(self, x):
@@ -76,15 +76,15 @@ class RetinaFace_Biubug6(nn.Module):
         super().__init__()
         if mobile:
             backbone = MobileNetV1(0.25, relu_type='lrelu_0.1', return_inter=[5, 11])
-            cins, cout, relu = [64, 128, 256], 64, 'lrelu_0.1'
+            cins, cout, activ = [64, 128, 256], 64, 'lrelu_0.1'
         else:
             backbone = ResNet50(return_count=3)
-            cins, cout, relu = [512, 1024, 2048], 256, 'plain'
+            cins, cout, activ = [512, 1024, 2048], 256, 'relu'
         self.bases = list(zip([8, 16, 32], post.make_anchors([16, 64, 256], scales=[1, 2])))
         num_anchors = 2
         self.body = backbone
-        self.feature_pyramid = FPN(cins, cout, relu, smoothBeforeMerge=True)
-        self.context_modules = nn.ModuleList([SSH(cout, cout, relu) for _ in range(len(cins))])
+        self.feature_pyramid = FeaturePyramidNetwork(cins, cout, activ, smoothBeforeMerge=True)
+        self.context_modules = nn.ModuleList([SSH(cout, cout, activ) for _ in range(len(cins))])
         self.heads_class = nn.ModuleList([Head(cout, num_anchors, 2) for _ in range(len(cins))])
         self.heads_boxes = nn.ModuleList([Head(cout, num_anchors, 4) for _ in range(len(cins))])
         self.heads_ldmks = nn.ModuleList([Head(cout, num_anchors, 10) for _ in range(len(cins))])
@@ -118,13 +118,13 @@ class RetinaFace_BBT(nn.Module):
         backbone = ResNet50() if resnet50 else ResNet152()
         cins = [256, 512, 1024, 2048]
         cout = 256
-        relu='plain'
+        activ='relu'
         anchors = post.make_anchors([16, 32, 64, 128, 256], scales=[1, 2**(1/3), 2**(2/3)])
         self.bases = list(zip([4, 8, 16, 32, 64], anchors))
         num_anchors = 3
         self.body = backbone
-        self.feature_pyramid = FPN(cins, cout, relu, P6='fromC5', nonCumulative=True)
-        self.context_modules = nn.ModuleList([SSH(cout, cout, relu) for _ in range(len(cins) + 1)])
+        self.feature_pyramid = FeaturePyramidNetwork(cins, cout, activ, P6='fromC5', nonCumulative=True)
+        self.context_modules = nn.ModuleList([SSH(cout, cout, activ) for _ in range(len(cins) + 1)])
         self.heads_class = nn.ModuleList([Head(cout, num_anchors, 2) for _ in range(len(cins) + 1)])
         self.heads_boxes = nn.ModuleList([Head(cout, num_anchors, 4) for _ in range(len(cins) + 1)])
         self.to(device)
@@ -182,7 +182,7 @@ class RetinaNet_TorchVision(nn.Module):
         anchors_per_level = 9
         self.num_classes = 91
         self.body = backbone
-        self.feature_pyramid = FPN(cins, cout, relu=None, bn=None, P6='fromP5', P7=True, smoothP5=True)
+        self.fpn = FeaturePyramidNetwork(cins, cout, None, None, P6='fromP5', P7=True, smoothP5=True)
         self.cls_head = HeadShared(cout, anchors_per_level, self.num_classes)
         self.reg_head = HeadShared(cout, anchors_per_level, 4)
         self.to(device)
@@ -196,7 +196,7 @@ class RetinaNet_TorchVision(nn.Module):
         x = prep.batch(ts, mult=32)
         
         xs = self.body(x)
-        xs = self.feature_pyramid(xs)
+        xs = self.fpn(xs)
         reg = [self.reg_head(lvl) for lvl in xs]
         log = [self.cls_head(lvl) for lvl in xs]
         lsz = [lvl.shape[1] for lvl in log]

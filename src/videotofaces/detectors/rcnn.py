@@ -6,7 +6,7 @@ import torch.nn.functional as F
 import torchvision.ops    
 
 from .operations import prep, post
-from .components.fpn import FPN
+from .components.fpn import FeaturePyramidNetwork
 from ..backbones.basic import ConvUnit
 from ..backbones.resnet import ResNet50
 from ..backbones.mobilenet import MobileNetV3L
@@ -17,7 +17,7 @@ class RegionProposalNetwork(nn.Module):
 
     def __init__(self, c, num_anchors, conv_depth, decode_settings):
         super().__init__()
-        self.conv = nn.Sequential(*[ConvUnit(c, c, 3, 1, 1, 'plain', None) for _ in range(conv_depth)])
+        self.conv = nn.Sequential(*[ConvUnit(c, c, 3, 1, 1, 'relu', None) for _ in range(conv_depth)])
         self.log = nn.Conv2d(c, num_anchors, 1, 1)
         self.reg = nn.Conv2d(c, num_anchors * 4, 1, 1)
         self.dec = decode_settings
@@ -58,7 +58,7 @@ class RoIProcessingNetwork(nn.Module):
 
     def __init__(self, c, roi_map_size, clin, conv_depth, mlp_depth, num_classes, decode_settings):
         super().__init__()
-        self.conv = nn.ModuleList([ConvUnit(c, c, 3, 1, 1, 'plain') for _ in range(conv_depth)])
+        self.conv = nn.ModuleList([ConvUnit(c, c, 3, 1, 1, 'relu') for _ in range(conv_depth)])
         c1 = c * roi_map_size ** 2
         self.fc = nn.ModuleList([nn.Linear(c1 if i == 0 else clin, clin) for i in range(mlp_depth)])
         self.cls = nn.Linear(clin, num_classes)
@@ -116,21 +116,32 @@ class FasterRCNN(nn.Module):
 
     thub = 'https://download.pytorch.org/models/'
     links = {
-        'resnet50_coco_v1': thub + 'fasterrcnn_resnet50_fpn_coco-258fb6c6.pth',
-        'resnet50_coco_v2': thub + 'fasterrcnn_resnet50_fpn_v2_coco-dd69338a.pth',
+        'resnet50_v1': thub + 'fasterrcnn_resnet50_fpn_coco-258fb6c6.pth',
+        'resnet50_v2': thub + 'fasterrcnn_resnet50_fpn_v2_coco-dd69338a.pth',
         'mobilenetv3l_hires': thub + 'fasterrcnn_mobilenet_v3_large_fpn-fb6a3cc7.pth',
         'mobilenetv3l_lores': thub + ''
     }
 
-    def __init__(self, pretrained='resnet50_coco_v1', device='cpu'):
+    def __init__(self, pretrained='resnet50_v1', device='cpu'):
         super().__init__()
-        if pretrained == 'resnet50_coco_v1':
+        cins = [256, 512, 1024, 2048]
+        cout = 256
+        fpn_batchnorm = None
+        rpn_convdepth = 1
+        roi_convdepth = 0
+        roi_mlp_depth = 2
+        
+        anchors_per_level = 3
+        num_classes = 91
+        self.strides = [4, 8, 16, 32, 64]
+        anchors = post.make_anchors_rounded([32, 64, 128, 256, 512], [1], [2, 1, 0.5])
+        self.bases = list(zip(self.strides, anchors))
+        decode_set1 = (1, 1, math.log(1000 / 16))
+        decode_set2 = (0.1, 0.2, math.log(1000 / 16))
+
+        if pretrained == 'resnet50_v1':
             backbone = ResNet50(bn_eps=0.0)
-            fpn_batchnorm = None
-            rpn_convdepth = 1
-            roi_convdepth = 0
-            roi_mlp_depth = 2
-        elif pretrained == 'resnet50_coco_v2':
+        elif pretrained == 'resnet50_v2':
             backbone = ResNet50()
             fpn_batchnorm = 1e-05
             rpn_convdepth = 2
@@ -139,24 +150,16 @@ class FasterRCNN(nn.Module):
         elif pretrained == 'mobilenetv3l_hires':
             backbone = MobileNetV3L([13])
             cins = [160, 960]
-
-        cins = [256, 512, 1024, 2048]
-        cout = 256
-        #anchors_per_level = 3
-        self.num_classes = 91
-        self.strides = [4, 8, 16, 32, 64]
-        anchors = post.make_anchors_rounded([32, 64, 128, 256, 512], [1], [2, 1, 0.5])
-        self.bases = list(zip(self.strides, anchors))
-        self.decode_set1 = (1, 1, math.log(1000 / 16))
-        self.decode_set2 = (0.1, 0.2, math.log(1000 / 16))
+            self.strides = [32, 64]
+            anchors_per_level = 15
 
         self.body = backbone
-        self.feature_pyramid = FPN(cins, cout, relu=None, bn=fpn_batchnorm, pool=True, smoothP5=True)
-        self.rpn = RegionProposalNetwork(cout, 3, rpn_convdepth, self.decode_set1)
-        self.roi = RoIProcessingNetwork(cout, 7, 1024, roi_convdepth, roi_mlp_depth, self.num_classes, self.decode_set2)
+        self.fpn = FeaturePyramidNetwork(cins, cout, None, fpn_batchnorm, pool=True, smoothP5=True)
+        self.rpn = RegionProposalNetwork(cout, anchors_per_level, rpn_convdepth, decode_set1)
+        self.roi = RoIProcessingNetwork(cout, 7, 1024, roi_convdepth, roi_mlp_depth, num_classes, decode_set2)
                 
         self.to(device)
-        load_weights(self, self.links[pretrained], pretrained, device, add_num_batches=pretrained=='resnet50_coco_v1')
+        load_weights(self, self.links[pretrained], pretrained, device, add_num_batches=pretrained!='resnet50_v2')
 
     def forward(self, imgs):
         dv = next(self.parameters()).device
@@ -166,7 +169,8 @@ class FasterRCNN(nn.Module):
         
         priors = post.get_priors(x.shape[2:], self.bases, dv, 'corner', 'fit', concat=False)
         xs = self.body(x)
-        xs = self.feature_pyramid(xs)
+        xs = self.fpn(xs)
+        return xs
         proposals, imidx = self.rpn(xs, priors, sz_used, lvtop=1000, imtop=1000,
                                     score_thr=0.0, iou_thr=0.7, min_size=1e-3)
         boxes, scores, classes = self.roi(proposals, imidx, xs[:-1], self.strides[:-1], sz_used,

@@ -4,7 +4,7 @@ import torch.nn as nn
 
 class ConvUnit(nn.Module):
 
-    def __init__(self, cin, cout, k, s, p, relu_type, bn=1e-05, grp=1):
+    def __init__(self, cin, cout, k, s, p, activ, bn=1e-05, grp=1):
         super().__init__()
 
         cin, cout, grp = int(cin), int(cout), int(grp)
@@ -15,23 +15,23 @@ class ConvUnit(nn.Module):
         else:
             self.bn = nn.BatchNorm2d(cout, eps=bn)
 
-        if relu_type == None:
-            self.relu = None
-        elif relu_type == 'plain':
-            self.relu = nn.ReLU(inplace=True)
-        elif relu_type == 'prelu':
-            self.relu = nn.PReLU(cout)
-        elif relu_type.startswith('lrelu'):
-            leak = float(relu_type.split('_')[1])
-            self.relu = nn.LeakyReLU(leak, inplace=True)
-        elif relu_type == 'hardswish':
-            self.relu = nn.Hardswish()
+        if activ == None:
+            self.activ = None
+        elif activ == 'relu':
+            self.activ = nn.ReLU(inplace=True)
+        elif activ == 'prelu':
+            self.activ = nn.PReLU(cout)
+        elif activ.startswith('lrelu'):
+            leak = float(activ.split('_')[1])
+            self.activ = nn.LeakyReLU(leak, inplace=True)
+        elif activ == 'hardswish':
+            self.activ = nn.Hardswish()
 
 
     def forward(self, x):
         x = self.conv(x)
         if self.bn:
             x = self.bn(x)
-        if self.relu:
-            x = self.relu(x)
+        if self.activ:
+            x = self.activ(x)
         return x

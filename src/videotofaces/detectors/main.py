@@ -20,11 +20,8 @@ class Detector():
         print('Initializing %s model for object detection' % architecture)
 
         if architecture == 'FasterRCNN':
-            source, variation, version = modelnum.name.lower().split('_')[1:4]
-            if version == 'v1':
-                self.model = FasterRCNN('resnet50_coco_v1', dv)
-            else:
-                self.model = FasterRCNN('resnet50_coco_v2', dv)
+            source, variation = modelnum.name.lower().split('_', 2)[1:3]
+            self.model = FasterRCNN(variation, dv)
         elif architecture == 'RetinaNet':
             self.model = RetinaNet_TorchVision(dv)
         elif architecture == 'RetinaFace':
@@ -52,6 +49,8 @@ class Detector():
 class detmodels(Enum):
     FasterRCNN_TorchVision_ResNet50_v1 = auto()
     FasterRCNN_TorchVision_ResNet50_v2 = auto()
+    FasterRCNN_TorchVision_MobileNetV3L_HiRes = auto()
+    FasterRCNN_TorchVision_MobileNetV3L_LoRes = auto()
     RetinaNet = auto()
     RetinaFace_Biubug6_MobileNet = auto()
     RetinaFace_Biubug6_ResNet50 = auto()
