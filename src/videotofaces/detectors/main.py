@@ -21,7 +21,8 @@ class Detector():
 
         if architecture == 'FasterRCNN':
             source, variation = modelnum.name.lower().split('_', 2)[1:3]
-            self.model = FasterRCNN(variation, dv)
+            source = 'tv' if source == 'torchvision' else 'mm'
+            self.model = FasterRCNN(source + '_' + variation, dv)
         elif architecture == 'RetinaNet':
             self.model = RetinaNet_TorchVision(dv)
         elif architecture == 'RetinaFace':
@@ -51,6 +52,7 @@ class detmodels(Enum):
     FasterRCNN_TorchVision_ResNet50_v2 = auto()
     FasterRCNN_TorchVision_MobileNetV3L_HiRes = auto()
     FasterRCNN_TorchVision_MobileNetV3L_LoRes = auto()
+    FasterRCNN_MMDet_ResNet50 = auto()
     RetinaNet = auto()
     RetinaFace_Biubug6_MobileNet = auto()
     RetinaFace_Biubug6_ResNet50 = auto()

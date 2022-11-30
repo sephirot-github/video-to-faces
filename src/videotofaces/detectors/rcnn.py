@@ -1,4 +1,6 @@
 import math
+from numpy.core.arrayprint import format_float_scientific
+from tensorflow.python.ops.math_ops import TruncateDiv
 
 import torch
 import torch.nn as nn
@@ -115,24 +117,30 @@ class RoIProcessingNetwork(nn.Module):
 class FasterRCNN(nn.Module):
 
     thub = 'https://download.pytorch.org/models/'
+    mmhub = 'https://download.openmmlab.com/mmdetection/v2.0/'
     links = {
-        'resnet50_v1': thub + 'fasterrcnn_resnet50_fpn_coco-258fb6c6.pth',
-        'resnet50_v2': thub + 'fasterrcnn_resnet50_fpn_v2_coco-dd69338a.pth',
-        'mobilenetv3l_hires': thub + 'fasterrcnn_mobilenet_v3_large_fpn-fb6a3cc7.pth',
-        'mobilenetv3l_lores': thub + 'fasterrcnn_mobilenet_v3_large_320_fpn-907ea3f9.pth'
+        'tv_resnet50_v1': thub + 'fasterrcnn_resnet50_fpn_coco-258fb6c6.pth',
+        'tv_resnet50_v2': thub + 'fasterrcnn_resnet50_fpn_v2_coco-dd69338a.pth',
+        'tv_mobilenetv3l_hires': thub + 'fasterrcnn_mobilenet_v3_large_fpn-fb6a3cc7.pth',
+        'tv_mobilenetv3l_lores': thub + 'fasterrcnn_mobilenet_v3_large_320_fpn-907ea3f9.pth',
+        'mm_resnet50': mmhub + 'faster_rcnn/faster_rcnn_r50_fpn_mstrain_3x_coco/faster_rcnn_r50_fpn_mstrain_3x_coco_20210524_110822-e10bd31c.pth',
     }
 
-    def __init__(self, pretrained='resnet50_v1', device='cpu'):
+    def __init__(self, pretrained='tv_resnet50_v1', device='cpu'):
         super().__init__()
-        arch, version = pretrained.split('_')
+        src, arch, version = pretrained.split('_')
         fpn_batchnorm, rpn_convdepth, roi_convdepth, roi_mlp_depth = None, 1, 0, 2
         decode_set1 = (1, 1, math.log(1000 / 16))
         decode_set2 = (0.1, 0.2, math.log(1000 / 16))
+        addnbatch = False
         if arch == 'resnet50':
-            backbone = ResNet50(bn_eps=0.0) if version == 'v1' else ResNet50()
+            bn_eps = 0.0 if src == 'tv' and version == 'v1' else 1e-5
+            backbone = ResNet50(bn_eps=bn_eps)
             cins = [256, 512, 1024, 2048]
             self.strides = [4, 8, 16, 32, 64]
             anchors = post.make_anchors_rounded([32, 64, 128, 256, 512], [1], [2, 1, 0.5])
+            if version == 'v1':
+                addnbatch = True
             if version == 'v2':
                 fpn_batchnorm, rpn_convdepth, roi_convdepth, roi_mlp_depth = 1e-05, 2, 4, 1
         elif arch == 'mobilenetv3l':
@@ -140,6 +148,7 @@ class FasterRCNN(nn.Module):
             cins = [160, 960]
             self.strides = [32, 32, 64]
             anchors = post.make_anchors_rounded([32, 32, 32], [1, 2, 4, 8, 16], [2, 1, 0.5])
+            addnbatch = True
             if version == 'lores':
                 self.resize_min = 320
                 self.resize_max = 640
@@ -153,7 +162,7 @@ class FasterRCNN(nn.Module):
         self.rpn = RegionProposalNetwork(256, len(anchors[0]), rpn_convdepth, decode_set1)
         self.roi = RoIProcessingNetwork(256, 7, 1024, roi_convdepth, roi_mlp_depth, 91, decode_set2)
         self.to(device)
-        load_weights(self, self.links[pretrained], pretrained, device, add_num_batches=pretrained!='resnet50_v2')
+        load_weights(self, self.links[pretrained], pretrained, device, add_num_batches=addnbatch)
 
     resize_min = 800
     resize_max = 1333
