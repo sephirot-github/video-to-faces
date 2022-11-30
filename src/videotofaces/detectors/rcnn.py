@@ -3,7 +3,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.ops    
+import torchvision.ops
 
 from .operations import prep, post
 from .components.fpn import FeaturePyramidNetwork
@@ -119,62 +119,64 @@ class FasterRCNN(nn.Module):
         'resnet50_v1': thub + 'fasterrcnn_resnet50_fpn_coco-258fb6c6.pth',
         'resnet50_v2': thub + 'fasterrcnn_resnet50_fpn_v2_coco-dd69338a.pth',
         'mobilenetv3l_hires': thub + 'fasterrcnn_mobilenet_v3_large_fpn-fb6a3cc7.pth',
-        'mobilenetv3l_lores': thub + ''
+        'mobilenetv3l_lores': thub + 'fasterrcnn_mobilenet_v3_large_320_fpn-907ea3f9.pth'
     }
 
     def __init__(self, pretrained='resnet50_v1', device='cpu'):
         super().__init__()
-        cins = [256, 512, 1024, 2048]
-        cout = 256
-        fpn_batchnorm = None
-        rpn_convdepth = 1
-        roi_convdepth = 0
-        roi_mlp_depth = 2
-        
-        anchors_per_level = 3
-        num_classes = 91
-        self.strides = [4, 8, 16, 32, 64]
-        anchors = post.make_anchors_rounded([32, 64, 128, 256, 512], [1], [2, 1, 0.5])
-        self.bases = list(zip(self.strides, anchors))
+        arch, version = pretrained.split('_')
+        fpn_batchnorm, rpn_convdepth, roi_convdepth, roi_mlp_depth = None, 1, 0, 2
         decode_set1 = (1, 1, math.log(1000 / 16))
         decode_set2 = (0.1, 0.2, math.log(1000 / 16))
-
-        if pretrained == 'resnet50_v1':
-            backbone = ResNet50(bn_eps=0.0)
-        elif pretrained == 'resnet50_v2':
-            backbone = ResNet50()
-            fpn_batchnorm = 1e-05
-            rpn_convdepth = 2
-            roi_convdepth = 4
-            roi_mlp_depth = 1
-        elif pretrained == 'mobilenetv3l_hires':
+        if arch == 'resnet50':
+            backbone = ResNet50(bn_eps=0.0) if version == 'v1' else ResNet50()
+            cins = [256, 512, 1024, 2048]
+            self.strides = [4, 8, 16, 32, 64]
+            anchors = post.make_anchors_rounded([32, 64, 128, 256, 512], [1], [2, 1, 0.5])
+            if version == 'v2':
+                fpn_batchnorm, rpn_convdepth, roi_convdepth, roi_mlp_depth = 1e-05, 2, 4, 1
+        elif arch == 'mobilenetv3l':
             backbone = MobileNetV3L([13])
             cins = [160, 960]
-            self.strides = [32, 64]
-            anchors_per_level = 15
+            self.strides = [32, 32, 64]
+            anchors = post.make_anchors_rounded([32, 32, 32], [1, 2, 4, 8, 16], [2, 1, 0.5])
+            if version == 'lores':
+                self.resize_min = 320
+                self.resize_max = 640
+                self.lvtop = 150
+                self.imtop1 = 150
+                self.score_thr1 = 0.05
 
+        self.bases = list(zip(self.strides, anchors))
         self.body = backbone
-        self.fpn = FeaturePyramidNetwork(cins, cout, None, fpn_batchnorm, pool=True, smoothP5=True)
-        self.rpn = RegionProposalNetwork(cout, anchors_per_level, rpn_convdepth, decode_set1)
-        self.roi = RoIProcessingNetwork(cout, 7, 1024, roi_convdepth, roi_mlp_depth, num_classes, decode_set2)
-                
+        self.fpn = FeaturePyramidNetwork(cins, 256, None, fpn_batchnorm, pool=True, smoothP5=True)
+        self.rpn = RegionProposalNetwork(256, len(anchors[0]), rpn_convdepth, decode_set1)
+        self.roi = RoIProcessingNetwork(256, 7, 1024, roi_convdepth, roi_mlp_depth, 91, decode_set2)
         self.to(device)
         load_weights(self, self.links[pretrained], pretrained, device, add_num_batches=pretrained!='resnet50_v2')
+
+    resize_min = 800
+    resize_max = 1333
+    score_thr1 = 0.0
+    score_thr2 = 0.05
+    lvtop = 1000
+    imtop1 = 1000
+    imtop2 = 100
 
     def forward(self, imgs):
         dv = next(self.parameters()).device
         ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
-        ts, sz_orig, sz_used = prep.resize(ts, resize_min=800, resize_max=1333)
+        ts, sz_orig, sz_used = prep.resize(ts, resize_min=self.resize_min, resize_max=self.resize_max)
         x = prep.batch(ts, mult=32)
         
         priors = post.get_priors(x.shape[2:], self.bases, dv, 'corner', 'fit', concat=False)
         xs = self.body(x)
         xs = self.fpn(xs)
-        return xs
-        proposals, imidx = self.rpn(xs, priors, sz_used, lvtop=1000, imtop=1000,
-                                    score_thr=0.0, iou_thr=0.7, min_size=1e-3)
+        proposals, imidx = self.rpn(xs, priors, sz_used, lvtop=self.lvtop, imtop=self.imtop1,
+                                    score_thr=self.score_thr1, iou_thr=0.7, min_size=1e-3)
         boxes, scores, classes = self.roi(proposals, imidx, xs[:-1], self.strides[:-1], sz_used,
-                                          score_thr=0.05, iou_thr=0.5, imtop=100, min_size=1e-2)
+                                          score_thr=self.score_thr2, iou_thr=0.5, imtop=self.imtop2,
+                                          min_size=1e-2)
         
         scalebacks = torch.tensor(sz_orig) / torch.tensor(sz_used)
         scalebacks = scalebacks.flip(1).repeat(1, 2)
