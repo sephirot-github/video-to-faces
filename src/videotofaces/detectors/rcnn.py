@@ -58,13 +58,13 @@ class RegionProposalNetwork(nn.Module):
 
 class RoIProcessingNetwork(nn.Module):
 
-    def __init__(self, c, roi_map_size, clin, conv_depth, mlp_depth, num_classes, decode_settings):
+    def __init__(self, c, roi_map_size, clin, conv_depth, mlp_depth, num_classes, bckg_log, bckg_reg, decode_settings):
         super().__init__()
         self.conv = nn.ModuleList([ConvUnit(c, c, 3, 1, 1, 'relu') for _ in range(conv_depth)])
         c1 = c * roi_map_size ** 2
         self.fc = nn.ModuleList([nn.Linear(c1 if i == 0 else clin, clin) for i in range(mlp_depth)])
-        self.cls = nn.Linear(clin, num_classes)
-        self.reg = nn.Linear(clin, num_classes * 4)
+        self.cls = nn.Linear(clin, bckg_log + num_classes)
+        self.reg = nn.Linear(clin, (bckg_reg + num_classes) * 4)
         self.dec = decode_settings
 
     def heads(self, x):
@@ -128,7 +128,14 @@ class FasterRCNN(nn.Module):
 
     def __init__(self, pretrained='tv_resnet50_v1', device='cpu'):
         super().__init__()
-        src, arch, version = pretrained.split('_')
+        parts = pretrained.split('_')
+        src, arch = parts[0:2]
+        self.src = src
+        version = None if len(parts) <= 2 else parts[2]
+        num_classes = 90 if src == 'tv' else 80
+        bckg_log, bckg_reg = 1, 1 if src == 'tv' else 0
+        weights_sub = None if src == 'tv' else 'state_dict'
+        weights_extra = None if src == 'tv' else self.mm_conversion
         fpn_batchnorm, rpn_convdepth, roi_convdepth, roi_mlp_depth = None, 1, 0, 2
         decode_set1 = (1, 1, math.log(1000 / 16))
         decode_set2 = (0.1, 0.2, math.log(1000 / 16))
@@ -160,9 +167,18 @@ class FasterRCNN(nn.Module):
         self.body = backbone
         self.fpn = FeaturePyramidNetwork(cins, 256, None, fpn_batchnorm, pool=True, smoothP5=True)
         self.rpn = RegionProposalNetwork(256, len(anchors[0]), rpn_convdepth, decode_set1)
-        self.roi = RoIProcessingNetwork(256, 7, 1024, roi_convdepth, roi_mlp_depth, 91, decode_set2)
+        self.roi = RoIProcessingNetwork(256, 7, 1024, roi_convdepth, roi_mlp_depth, num_classes, bckg_log, bckg_reg, decode_set2)
         self.to(device)
-        load_weights(self, self.links[pretrained], pretrained, device, add_num_batches=addnbatch)
+        load_weights(self, self.links[pretrained], pretrained, device, sub=weights_sub, add_num_batches=addnbatch, extra_conversion=weights_extra)
+
+    def mm_conversion(self, wd):
+        # in MMDet weights for RoI head, representation FC and final reg/log FCs for are switched over
+        wl = list(wd.items())
+        els = [wl.pop(-1) for _ in range(8)][::-1] # last 8 entries
+        for el in els[4:] + els[:4]:
+            wl.append(el)
+        wd = dict(wl)
+        return wd
 
     resize_min = 800
     resize_max = 1333
@@ -174,15 +190,21 @@ class FasterRCNN(nn.Module):
 
     def forward(self, imgs):
         dv = next(self.parameters()).device
-        ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
-        ts, sz_orig, sz_used = prep.resize(ts, resize_min=self.resize_min, resize_max=self.resize_max)
-        x = prep.batch(ts, mult=32)
-        
+        if self.src == 'tv':
+            ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
+            ts, sz_orig, sz_used = prep.resize(ts, self.resize_min, self.resize_max)
+            x = prep.batch(ts, mult=32)
+        else:
+            imgs, sz_orig, sz_used = prep.resize_cv2(imgs, self.resize_min, self.resize_max)
+            ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
+            x = prep.batch(ts, mult=32)
+                
         priors = post.get_priors(x.shape[2:], self.bases, dv, 'corner', 'fit', concat=False)
         xs = self.body(x)
         xs = self.fpn(xs)
         proposals, imidx = self.rpn(xs, priors, sz_used, lvtop=self.lvtop, imtop=self.imtop1,
                                     score_thr=self.score_thr1, iou_thr=0.7, min_size=1e-3)
+        return proposals, imidx
         boxes, scores, classes = self.roi(proposals, imidx, xs[:-1], self.strides[:-1], sz_used,
                                           score_thr=self.score_thr2, iou_thr=0.5, imtop=self.imtop2,
                                           min_size=1e-2)

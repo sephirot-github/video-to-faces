@@ -34,11 +34,12 @@ def load_weights(model, link, suffix, device, extra_conversion=None, sub=None, a
     names = list(wd_src)
     shift = 0
     for i, w in enumerate(list(model.state_dict())):
-        #print(names[i], ' to ', w)
         if add_num_batches and w.endswith('num_batches_tracked'):
+            #print('0 to ', w)
             wd_dst[w] = torch.tensor(0)
             shift += 1
         else:
+            #print(names[i - shift], ' to ', w)
             wd_dst[w] = wd_src[names[i - shift]]
     model.load_state_dict(wd_dst)
     #for w in model.state_dict(): print(w, '\t', model.state_dict()[w].shape)

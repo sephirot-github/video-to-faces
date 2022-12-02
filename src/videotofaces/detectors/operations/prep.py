@@ -1,5 +1,6 @@
 import math
 
+import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -31,6 +32,7 @@ def resize(ts, resize_min, resize_max):
         sz = ts[i].shape[1:3]
         scl = min(resize_min / min(sz), resize_max / max(sz))
         ts[i] = F.interpolate(ts[i].unsqueeze(0), None, scl, 'bilinear', recompute_scale_factor=True)[0]
+        #ts[i] = F.interpolate(ts[i].unsqueeze(0), (int(sz[0] * scl + 0.5), int(sz[1] * scl + 0.5)), None, 'bilinear')[0]
         sz_orig.append(sz)
         sz_used.append(ts[i].shape[1:3])
     return ts, sz_orig, sz_used
@@ -46,3 +48,16 @@ def batch(ts, mult):
     for i in range(len(ts)):
         x[i, :, :ts[i].shape[1], :ts[i].shape[2]].copy_(ts[i])
     return x
+
+
+def resize_cv2(imgs, resize_min, resize_max):
+    res, sz_orig, sz_used = [], [], []
+    for i in range(len(imgs)):
+        sz = imgs[i].shape[:2]
+        scl = min(resize_min / min(sz), resize_max / max(sz))
+        n = int(sz[0] * scl + 0.5), int(sz[1] * scl + 0.5)
+        im = cv2.resize(imgs[i], n[::-1], interpolation=cv2.INTER_LINEAR)
+        res.append(im)
+        sz_orig.append(sz)
+        sz_used.append(n)
+    return res, sz_orig, sz_used
