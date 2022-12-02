@@ -74,6 +74,19 @@ class TestRCNN(unittest.TestCase):
         np.testing.assert_almost_equal(s[0][17:22], np.array([0.1037, 0.1011, 0.0793, 0.0790, 0.0786]), decimal=4)
         np.testing.assert_equal(l[1], np.array([28, 1, 15, 1, 27, 15, 27, 67, 31, 33, 15, 31, 62, 31, 1]))
 
+    def test_rcnn_mmdet_resnet50(self):
+        b, s, l = self._run_inference(detmodels.FasterRCNN_MMDet_ResNet50)
+        self.assertEqual((b[0].shape, s[0].shape), ((82, 4), (82,)))
+        self.assertEqual((b[1].shape, l[1].shape), ((40, 4), (40,)))
+        np.testing.assert_almost_equal(b[0][25], np.array([382.1297, 215.6923, 421.2562, 222.4981]), decimal=4)
+        np.testing.assert_almost_equal(b[0][72], np.array([411.7101, 218.6185, 425.0581, 232.2054]), decimal=4)
+        np.testing.assert_almost_equal(b[1][9], np.array([532.8469, 262.6869, 639.9117, 329.0356]), decimal=4)
+        np.testing.assert_almost_equal(b[1][-9], np.array([155.6823, 142.8020, 364.9139, 330.7866]), decimal=4)
+        np.testing.assert_almost_equal(s[0][32:37], np.array([0.2276, 0.2159, 0.2128, 0.1902, 0.1612]), decimal=4)
+        np.testing.assert_almost_equal(s[1][2:7], np.array([0.9045, 0.8858, 0.8521, 0.6879, 0.5815]), decimal=4)
+        np.testing.assert_equal(l[0][64:79], np.array([56, 60, 58, 56, 60, 56, 46, 56, 56, 60, 68, 56, 60, 56, 56]))
+        np.testing.assert_equal(l[1][14:29], np.array([13, 13, 67, 24, 13, 60, 60, 60, 0, 26, 13, 0, 26, 60, 13]))
+
 
 if __name__ == '__main__':
     unittest.main()
