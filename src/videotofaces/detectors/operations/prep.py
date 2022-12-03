@@ -8,7 +8,22 @@ import torch.nn.functional as F
 # source: https://github.com/pytorch/vision/blob/main/torchvision/models/detection/transform.py
 
 
-def normalize(cv2_images, device, means, stds, to0_1=True, toRGB=True):
+def full(imgs, dv, resize, resize_with='cv2', norm='imagenet'):
+    assert resize_with in ['cv2', 'torch']
+    means = [0.485, 0.456, 0.406] if norm == 'imagenet' else (norm[0] if norm else None)
+    stdvs = [0.229, 0.224, 0.225] if norm == 'imagenet' else (norm[1] if norm else None)
+    rmin, rmax = resize
+    if resize_with == 'cv2':
+        imgs, sz_orig, sz_used = resize_cv2(imgs, rmin, rmax)
+        ts = to_tensors(imgs, dv, means=means, stds=stdvs)
+    elif resize_with == 'torch':
+        ts = to_tensors(imgs, dv, means=means, stds=stdvs)
+        ts, sz_orig, sz_used = resize_torch(ts, rmin, rmax)
+    x = pad_and_batch(ts, mult=32)
+    return x
+
+
+def to_tensors(cv2_images, device, means, stds, to0_1=True, toRGB=True):
     """"""
     ts = []
     for img in cv2_images:
@@ -25,7 +40,7 @@ def normalize(cv2_images, device, means, stds, to0_1=True, toRGB=True):
     return ts
 
 
-def resize(ts, resize_min, resize_max):
+def resize_torch(ts, resize_min, resize_max):
     """"""
     sz_orig, sz_used = [], []
     for i in range(len(ts)):
@@ -36,18 +51,6 @@ def resize(ts, resize_min, resize_max):
         sz_orig.append(sz)
         sz_used.append(ts[i].shape[1:3])
     return ts, sz_orig, sz_used
-
-
-def batch(ts, mult):
-    """"""
-    hmax = max([t.shape[1] for t in ts])
-    wmax = max([t.shape[2] for t in ts])
-    hmax = int(math.ceil(hmax / mult) * mult)
-    wmax = int(math.ceil(wmax / mult) * mult)
-    x = torch.full((len(ts), 3, hmax, wmax), 0, dtype=torch.float32, device=ts[0].device)
-    for i in range(len(ts)):
-        x[i, :, :ts[i].shape[1], :ts[i].shape[2]].copy_(ts[i])
-    return x
 
 
 def resize_cv2(imgs, resize_min, resize_max):
@@ -61,3 +64,15 @@ def resize_cv2(imgs, resize_min, resize_max):
         sz_orig.append(sz)
         sz_used.append(n)
     return res, sz_orig, sz_used
+
+
+def pad_and_batch(ts, mult):
+    """"""
+    hmax = max([t.shape[1] for t in ts])
+    wmax = max([t.shape[2] for t in ts])
+    hmax = int(math.ceil(hmax / mult) * mult)
+    wmax = int(math.ceil(wmax / mult) * mult)
+    x = torch.full((len(ts), 3, hmax, wmax), 0, dtype=torch.float32, device=ts[0].device)
+    for i in range(len(ts)):
+        x[i, :, :ts[i].shape[1], :ts[i].shape[2]].copy_(ts[i])
+    return x

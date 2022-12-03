@@ -1,7 +1,3 @@
-import math
-from numpy.core.arrayprint import format_float_scientific
-from tensorflow.python.ops.math_ops import TruncateDiv
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -17,12 +13,11 @@ from ..utils.weights import load_weights
 
 class RegionProposalNetwork(nn.Module):
 
-    def __init__(self, c, num_anchors, conv_depth, decode_settings):
+    def __init__(self, c, num_anchors, conv_depth):
         super().__init__()
         self.conv = nn.Sequential(*[ConvUnit(c, c, 3, 1, 1, 'relu', None) for _ in range(conv_depth)])
         self.log = nn.Conv2d(c, num_anchors, 1, 1)
         self.reg = nn.Conv2d(c, num_anchors * 4, 1, 1)
-        self.dec = decode_settings
 
     def head(self, x, priors, lvtop):
         n = x.shape[0]
@@ -32,7 +27,7 @@ class RegionProposalNetwork(nn.Module):
         log, top = log.topk(min(lvtop, log.shape[1]), dim=1)
         reg = reg.gather(1, top.expand(-1, -1, 4))
         pri = priors.expand(n, -1, -1).gather(1, top.expand(-1, -1, 4))
-        boxes = post.decode_boxes(reg, pri, settings=self.dec)
+        boxes = post.decode_boxes(reg, pri, mults=(1, 1), clamp=True)
         return boxes, log, log.shape[1]
 
     def forward(self, fmaps, priors, imsizes, lvtop, imtop, score_thr, iou_thr, min_size):
@@ -58,15 +53,13 @@ class RegionProposalNetwork(nn.Module):
 
 class RoIProcessingNetwork(nn.Module):
 
-    def __init__(self, c, roi_map_size, clin, conv_depth, mlp_depth, num_classes,
-                 bckg_first, decode_settings, ralign_settings):
+    def __init__(self, c, roi_map_size, clin, conv_depth, mlp_depth, num_classes, bckg_first, ralign_settings):
         super().__init__()
         self.conv = nn.ModuleList([ConvUnit(c, c, 3, 1, 1, 'relu') for _ in range(conv_depth)])
         c1 = c * roi_map_size ** 2
         self.fc = nn.ModuleList([nn.Linear(c1 if i == 0 else clin, clin) for i in range(mlp_depth)])
         self.cls = nn.Linear(clin, 1 + num_classes)
         self.reg = nn.Linear(clin, num_classes * 4)
-        self.decode_set = decode_settings
         self.ralign_set = ralign_settings
         self.bckg_first = bckg_first
 
@@ -101,7 +94,7 @@ class RoIProcessingNetwork(nn.Module):
         proposals, imidx = proposals[idx], imidx[idx]
 
         proposals = post.convert_to_cwh(proposals)
-        boxes = post.decode_boxes(reg, proposals, settings=self.decode_set)
+        boxes = post.decode_boxes(reg, proposals, mults=(0.1, 0.2), clamp=True)
         boxes = post.clamp_to_canvas_vect(boxes, imsizes, imidx)
         boxes, scr, cls, imidx = post.remove_small(boxes, min_size, scr, cls, imidx)
         
@@ -128,8 +121,55 @@ class FasterRCNN(nn.Module):
         'tv_resnet50_v2': thub + 'fasterrcnn_resnet50_fpn_v2_coco-dd69338a.pth',
         'tv_mobilenetv3l_hires': thub + 'fasterrcnn_mobilenet_v3_large_fpn-fb6a3cc7.pth',
         'tv_mobilenetv3l_lores': thub + 'fasterrcnn_mobilenet_v3_large_320_fpn-907ea3f9.pth',
-        'mm_resnet50': mmhub + 'faster_rcnn/faster_rcnn_r50_fpn_mstrain_3x_coco/faster_rcnn_r50_fpn_mstrain_3x_coco_20210524_110822-e10bd31c.pth',
+        'mm_resnet50': mmhub + 'faster_rcnn/faster_rcnn_r50_fpn_mstrain_3x_coco/'\
+                               'faster_rcnn_r50_fpn_mstrain_3x_coco_20210524_110822-e10bd31c.pth',
     }
+
+    def config_base(self):
+        cfg = {}
+        cfg.update(fpn_batchnorm=None, rpn_convdepth=1, roi_convdepth=0, roi_mlp_depth=2)
+        cfg.update(resize_min=800, resize_max=1333)
+        cfg.update(lvtop=1000, score_thr1=0.0, imtop1=1000, min_size1=0)
+        cfg.update(score_thr2=0.05, imtop2=100, min_size2=0)
+        cfg.update(weights_add_nbatches=False)
+        return cfg
+
+    def config_torchvision(self, cfg):
+        cfg.update(num_classes=90, bckg_class_first=True, ralign_settings=(2, False))
+        cfg.update(weights_sub=None, weights_extra=self.tv_conversion)
+        cfg.update(prep_resize='torch', priors_patches='fit', round_anchors=True)
+        cfg.update(min_size1=1e-3, min_size2=1e-2)
+        return cfg
+    
+    def config_mmdet(self, cfg):
+        cfg.update(num_classes=80, bckg_class_first=False, ralign_settings=(0, True))
+        cfg.update(weights_sub='state_dict', weights_extra=self.mm_conversion)
+        cfg.update(prep_resize='cv2', priors_patches='as_is', round_anchors=False)
+        return cfg
+
+    def config_resnet(self, cfg):
+        cfg.update(bbone='resnet50', resnet_bn_eps=1e-5)
+        cfg.update(cins=[256, 512, 1024, 2048], strides=[4, 8, 16, 32, 64])
+        cfg.update(anchors=post.make_anchors([32, 64, 128, 256, 512], [1], [2, 1, 0.5], cfg['round_anchors']))
+
+    def config_mobile(self, cfg):
+        cfg.update(bbone='mobilenetv3l')
+        cfg.update(cins=[160, 960], strides=[32, 32, 64])
+        cfg.update(anchors=post.make_anchors([32, 32, 32], [1, 2, 4, 8, 16], [2, 1, 0.5], cfg['round_anchors']))
+
+    def config(self, src, arch, version=None):
+        cfg = self.config_base()
+        cfg = self.config_torchvision(cfg) if src == 'tv' else self.config_mmdet(cfg)
+        cfg = self.config_resnet(cfg) if arch == 'resnet50' else self.config_mobile(cfg)
+        if src == 'tv' and (arch == 'resnet50' and version == 'v1' or arch == 'mobilenetv3l'):
+            cfg.update(weights_add_nbatches=True)
+        if src == 'tv' and arch == 'resnet50' and version == 'v1':
+            cfg.update(resnet_bn_eps=0.0)
+        if src == 'tv' and arch == 'resnet50' and version == 'v2':
+            cfg.update(fpn_batchnorm=1e-5, rpn_convdepth=2, roi_convdepth=4, roi_mlp_depth=1)
+        if src == 'tv' and arch == 'mobilenetv3l' and version == 'lores':
+            cfg.update(resize_min=320, resize_max=640, lvtop=150, imtop1=150, score_thr1=0.05)
+        return cfg
 
     def __init__(self, pretrained='tv_resnet50_v1', device='cpu'):
         super().__init__()
@@ -143,18 +183,13 @@ class FasterRCNN(nn.Module):
         weights_sub = None if src == 'tv' else 'state_dict'
         weights_extra = self.tv_conversion if src == 'tv' else self.mm_conversion
         fpn_batchnorm, rpn_convdepth, roi_convdepth, roi_mlp_depth = None, 1, 0, 2
-        decode_set1 = (1, 1, math.log(1000 / 16))
-        decode_set2 = (0.1, 0.2, math.log(1000 / 16))
         addnbatch = False
         if arch == 'resnet50':
             bn_eps = 0.0 if src == 'tv' and version == 'v1' else 1e-5
             backbone = ResNet50(bn_eps=bn_eps)
             cins = [256, 512, 1024, 2048]
             self.strides = [4, 8, 16, 32, 64]
-            if src == 'tv':
-                anchors = post.make_anchors_rounded([32, 64, 128, 256, 512], [1], [2, 1, 0.5])
-            else:
-                anchors = post.make_anchors([32, 64, 128, 256, 512], [1], [2, 1, 0.5])
+            anchors = post.make_anchors([32, 64, 128, 256, 512], [1], [2, 1, 0.5], src == 'tv')
             if version == 'v1':
                 addnbatch = True
             if version == 'v2':
@@ -163,7 +198,7 @@ class FasterRCNN(nn.Module):
             backbone = MobileNetV3L([13])
             cins = [160, 960]
             self.strides = [32, 32, 64]
-            anchors = post.make_anchors_rounded([32, 32, 32], [1, 2, 4, 8, 16], [2, 1, 0.5])
+            anchors = post.make_anchors([32, 32, 32], [1, 2, 4, 8, 16], [2, 1, 0.5], True)
             addnbatch = True
             if version == 'lores':
                 self.resize_min = 320
@@ -175,8 +210,8 @@ class FasterRCNN(nn.Module):
         self.bases = list(zip(self.strides, anchors))
         self.body = backbone
         self.fpn = FeaturePyramidNetwork(cins, 256, None, fpn_batchnorm, pool=True, smoothP5=True)
-        self.rpn = RegionProposalNetwork(256, len(anchors[0]), rpn_convdepth, decode_set1)
-        self.roi = RoIProcessingNetwork(256, 7, 1024, roi_convdepth, roi_mlp_depth, num_classes, bckg_first, decode_set2, ralign_set)
+        self.rpn = RegionProposalNetwork(256, len(anchors[0]), rpn_convdepth)
+        self.roi = RoIProcessingNetwork(256, 7, 1024, roi_convdepth, roi_mlp_depth, num_classes, bckg_first, ralign_set)
         self.to(device)
         load_weights(self, self.links[pretrained], pretrained, device, sub=weights_sub, add_num_batches=addnbatch, extra_conversion=weights_extra)
 
@@ -197,24 +232,17 @@ class FasterRCNN(nn.Module):
         wd = dict(wl)
         return wd
 
-    resize_min = 800
-    resize_max = 1333
-    score_thr1 = 0.0
-    score_thr2 = 0.05
-    lvtop = 1000
-    imtop1 = 1000
-    imtop2 = 100
-
     def forward(self, imgs):
         dv = next(self.parameters()).device
-        if self.src == 'tv':
-            ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
-            ts, sz_orig, sz_used = prep.resize(ts, self.resize_min, self.resize_max)
-            x = prep.batch(ts, mult=32)
-        else:
-            imgs, sz_orig, sz_used = prep.resize_cv2(imgs, self.resize_min, self.resize_max)
-            ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
-            x = prep.batch(ts, mult=32)
+        #if self.src == 'tv':
+        #    ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
+        #    ts, sz_orig, sz_used = prep.resize(ts, self.resize_min, self.resize_max)
+        #    x = prep.batch(ts, mult=32)
+        #else:
+        #    imgs, sz_orig, sz_used = prep.resize_cv2(imgs, self.resize_min, self.resize_max)
+        #    ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
+        #    x = prep.batch(ts, mult=32)
+        x = prep.full(imgs, dv, (self.cfg['resize_min'], self.cfg['resize_max']), self.cfg['prep_resize'])
                 
         priors = post.get_priors(x.shape[2:], self.bases, dv, 'corner', 'fit' if self.src =='tv' else 'as_is', concat=False)
         xs = self.body(x)

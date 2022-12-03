@@ -202,7 +202,7 @@ def top_per_level(idx, s, lvset, mult=1):
     return torch.cat(sel)
 
 
-def make_anchors(dims, scales=[1], ratios=[1]):
+def make_anchors(dims, scales=[1], ratios=[1], rounding=False):
     """For every possible combination (D, S, R) of dims, scales and ratios,
     makes a box with area = D*D*S*S and aspect ratio = R,
     returning len(dims) lists, each with len(scales) * len(ratios) tuples.
@@ -211,12 +211,14 @@ def make_anchors(dims, scales=[1], ratios=[1]):
     Output: [[(16, 16), (8, 8), (1.6, 1.6), (22.63, 11.31), (11.31, 5.66), (2.26, 1.13)],
              [(32, 32), (16, 16), (3.2, 3.2), (45.25, 22.63), (22.63, 11.31), (4.53, 2.26)]]
     """
+    if rounding:
+        return _make_anchors_rounded(dims, scales, ratios)
     mult = [math.sqrt(ar) for ar in ratios]
     anchors = [[(d * s * m, d * s / m) for m in mult for s in scales] for d in dims]
     return anchors
 
 
-def make_anchors_rounded(dims, scales, ratios):
+def _make_anchors_rounded(dims, scales, ratios):
     """Same as make_anchors but with two intermediate roundings to replicate TorchVision code:
     https://github.com/pytorch/vision/blob/main/torchvision/models/detection/anchor_utils.py#L58
     https://github.com/pytorch/vision/blob/main/torchvision/models/detection/retinanet.py#L51
@@ -282,7 +284,7 @@ def convert_to_cwh(boxes):
     return boxes
 
 
-def decode_boxes(pred, priors, settings):
+def decode_boxes(pred, priors, mults, clamp=False):
     """Converts predicted boxes from network outputs into actual image coordinates based on some
     fixed starting ``priors`` using Eq.1-4 from here: https://arxiv.org/pdf/1311.2524.pdf
     (as linked by Fast R-CNN paper, which is in turn linked by RetinaFace paper).
@@ -292,8 +294,8 @@ def decode_boxes(pred, priors, settings):
     here too for scaling the numbers back). See https://github.com/rykov8/ssd_keras/issues/53 and
     https://leimao.github.io/blog/Bounding-Box-Encoding-Decoding/#Representation-Encoding-With-Variance
     """
-    mult_xy, mult_wh = settings[:2]
-    max_exp_input = None if len(settings) < 3 else settings[2]
+    mult_xy, mult_wh = mults
+    max_exp_input = math.log(1000 / 16) if clamp else None
     xys = priors[..., 2:] * mult_xy * pred[..., :2] + priors[..., :2]
     whs = priors[..., 2:] * exp_clamped(mult_wh * pred[..., 2:], max_exp_input)
     boxes = torch.cat([xys - whs / 2, xys + whs / 2], dim=-1)
