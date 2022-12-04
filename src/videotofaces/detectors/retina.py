@@ -1,5 +1,3 @@
-import math
-
 import cv2
 import numpy as np
 import torch
@@ -94,7 +92,7 @@ class RetinaFace_Biubug6(nn.Module):
 
     def forward(self, imgs):
         dv = next(self.parameters()).device
-        ts = prep.normalize(imgs, dv, [104, 117, 123], stds=None, to0_1=False, toRGB=False)
+        ts = prep.to_tensors(imgs, dv, norm=([104, 117, 123], None), to0_1=False, toRGB=False)
         x = torch.stack(ts)
 
         xs = self.body(x)
@@ -133,7 +131,7 @@ class RetinaFace_BBT(nn.Module):
     
     def forward(self, imgs):
         dv = next(self.parameters()).device
-        ts = prep.normalize(imgs, dv, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ts = prep.to_tensors(imgs, dv, norm='imagenet')
         x = torch.stack(ts)
         
         xs = self.body(x)
@@ -191,27 +189,29 @@ class RetinaNet_TorchVision(nn.Module):
     
     def forward(self, imgs, score_thr=0.05, iou_thr=0.5, post_impl='vectorized'):
         dv = next(self.parameters()).device
-        ts = prep.normalize(imgs, dv, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225])
-        ts, sz_orig, sz_used = prep.resize(ts, resize_min=800, resize_max=1333)
-        x = prep.batch(ts, mult=32)
+        x, sz_orig, sz_used = prep.full(imgs, dv, (800, 1333), 'torch', norm='imagenet')
         
         xs = self.body(x)
         xs = self.fpn(xs)
         reg = [self.reg_head(lvl) for lvl in xs]
         log = [self.cls_head(lvl) for lvl in xs]
-        lsz = [lvl.shape[1] for lvl in log]
-        reg = torch.cat(reg, axis=1)
-        scr = torch.cat(log, axis=1).sigmoid_()
+        #lsz = [lvl.shape[1] for lvl in log]
+        #reg = torch.cat(reg, axis=1)
+        #scr = torch.cat(log, axis=1).sigmoid_()
 
-        priors = post.get_priors(x.shape[2:], self.get_bases(), dv, loc='corner', patches='fit')
-        b, s, c = post.get_results(
-            reg, scr, priors, score_thr, iou_thr, decode=(1, 1, math.log(1000 / 16)),
-            lvtop=1000, lvsizes=lsz, multiclassbox=True, imtop=300, implementation=post_impl,
-            scale=True, clamp=True, sizes_used=sz_used, sizes_orig=sz_orig)
+        priors = post.get_priors(x.shape[2:], self.get_bases(), dv, 'corner', 'fit')
+        #b, s, c = post.get_results(
+        #    reg, scr, priors, score_thr, iou_thr, decode=(1, 1, True),
+        #    lvtop=1000, lvsizes=lsz, multiclassbox=True, imtop=300, implementation=post_impl,
+        #    scale=True, clamp=True, sizes_used=sz_used, sizes_orig=sz_orig)
+
+
+
         b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
         return b, s, c
 
     def get_bases(self):
         strides = [8, 16, 32, 64, 128]
-        anchors = post.make_anchors_rounded([32, 64, 128, 256, 512], [1, 2**(1/3), 2**(2/3)], [2, 1, 0.5])
+        astarts = [32, 64, 128, 256, 512]
+        anchors = post.make_anchors(astarts, [1, 2**(1/3), 2**(2/3)], [2, 1, 0.5], rounding=True)
         return list(zip(strides, anchors))

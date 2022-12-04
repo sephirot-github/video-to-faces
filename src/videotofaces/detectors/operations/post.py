@@ -48,7 +48,7 @@ def clamp_to_canvas(boxes, img_size):
     return boxes
 
 
-def scale_back(boxes, size_orig, size_used):
+def scale_back1(boxes, size_orig, size_used):
     boxes[:, 0::2] *= size_orig[1] / size_used[1]
     boxes[:, 1::2] *= size_orig[0] / size_used[0]
     return boxes
@@ -122,7 +122,7 @@ def get_results(reg, scr, priors, score_thr, iou_thr, decode, lvtop=None, lvsize
         res = []
         for i in range(reg.shape[0]):
             idx, scores, classes = select_by_score(scr[i], score_thr, multiclassbox, (lvtop, lvsizes))
-            boxes = decode_boxes(reg[i][idx], priors[idx], settings=decode)
+            boxes = decode_boxes(reg[i][idx], priors[idx], mults=decode[:2], clamp=len(decode) == 3 and decode[2] == True)
             if clamp:
                 boxes = clamp_to_canvas(boxes, sizes_used[i])
             if min_size:
@@ -132,7 +132,7 @@ def get_results(reg, scr, priors, score_thr, iou_thr, decode, lvtop=None, lvsize
             b, s = boxes[keep], scores[keep]
             c = None if (classes is None) else classes[keep]
             if scale:
-                b = scale_back(b, sizes_orig[i], sizes_used[i])
+                b = scale_back1(b, sizes_orig[i], sizes_used[i])
             res.append((b, s, c))
         bl, sl, cl = map(list, zip(*res))
         return bl, sl, cl
@@ -143,7 +143,7 @@ def get_results(reg, scr, priors, score_thr, iou_thr, decode, lvtop=None, lvsize
         scr = scr.reshape(-1, scr.shape[-1])
         idx, scores, classes = select_by_score(scr, score_thr, multiclassbox, (lvtop, lvsizes, n))
         imidx = idx.div(dim, rounding_mode='floor') # == idx // dim
-        boxes = decode_boxes(reg[idx], priors[idx % dim], settings=decode)
+        boxes = decode_boxes(reg[idx], priors[idx % dim], mults=decode[:2], clamp=len(decode) == 3 and decode[2] == True)
         if clamp:
             boxes = clamp_to_canvas_vect(boxes, sizes_used, imidx)
         if min_size:
@@ -200,6 +200,13 @@ def top_per_level(idx, s, lvset, mult=1):
             _, top = torch.topk(s[lvidx], min(limit, lvidx.shape[0]))
             sel.append(lvidx[top])
     return torch.cat(sel)
+
+
+def scale_back(boxes, sz_orig, sz_used):
+    scalebacks = torch.tensor(sz_orig) / torch.tensor(sz_used)
+    scalebacks = scalebacks.flip(1).repeat(1, 2)
+    boxes = [boxes[i] * scalebacks[i] for i in range(len(boxes))]
+    return boxes
 
 
 def make_anchors(dims, scales=[1], ratios=[1], rounding=False):

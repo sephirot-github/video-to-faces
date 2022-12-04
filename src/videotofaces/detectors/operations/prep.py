@@ -1,7 +1,6 @@
 import math
 
 import cv2
-import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -10,21 +9,21 @@ import torch.nn.functional as F
 
 def full(imgs, dv, resize, resize_with='cv2', norm='imagenet'):
     assert resize_with in ['cv2', 'torch']
-    means = [0.485, 0.456, 0.406] if norm == 'imagenet' else (norm[0] if norm else None)
-    stdvs = [0.229, 0.224, 0.225] if norm == 'imagenet' else (norm[1] if norm else None)
     rmin, rmax = resize
     if resize_with == 'cv2':
         imgs, sz_orig, sz_used = resize_cv2(imgs, rmin, rmax)
-        ts = to_tensors(imgs, dv, means=means, stds=stdvs)
+        ts = to_tensors(imgs, dv, norm=norm)
     elif resize_with == 'torch':
-        ts = to_tensors(imgs, dv, means=means, stds=stdvs)
+        ts = to_tensors(imgs, dv, norm=norm)
         ts, sz_orig, sz_used = resize_torch(ts, rmin, rmax)
     x = pad_and_batch(ts, mult=32)
-    return x
+    return x, sz_orig, sz_used
 
 
-def to_tensors(cv2_images, device, means, stds, to0_1=True, toRGB=True):
+def to_tensors(cv2_images, device, norm, to0_1=True, toRGB=True):
     """"""
+    means = [0.485, 0.456, 0.406] if norm == 'imagenet' else (norm[0] if norm else None)
+    stdvs = [0.229, 0.224, 0.225] if norm == 'imagenet' else (norm[1] if norm else None)
     ts = []
     for img in cv2_images:
         t = torch.from_numpy(img).to(device, torch.float32)
@@ -34,8 +33,8 @@ def to_tensors(cv2_images, device, means, stds, to0_1=True, toRGB=True):
             t = t[:, :, [2, 1, 0]]
         if means:
             t -= torch.tensor(list(means), device=device)
-        if stds:
-            t /= torch.tensor(list(stds), device=device)
+        if stdvs:
+            t /= torch.tensor(list(stdvs), device=device)
         ts.append(t.permute(2, 0, 1))
     return ts
 
