@@ -42,7 +42,7 @@ class RegionProposalNetwork(nn.Module):
         boxes, obj = boxes[idx], obj[idx]
         imidx = idx.div(dim, rounding_mode='floor')
 
-        boxes = post.clamp_to_canvas_vect(boxes, imsizes, imidx)
+        boxes = post.clamp_to_canvas(boxes, imsizes, imidx)
         boxes, obj, idx, imidx = post.remove_small(boxes, cfg['min_size1'], obj, idx, imidx)
         groups = imidx * 10 + post.get_lvidx(idx % dim, lvlen)
         keep = torchvision.ops.batched_nms(boxes, obj, groups, cfg['iou_thr1'])
@@ -94,7 +94,7 @@ class RoIProcessingNetwork(nn.Module):
 
         proposals = post.convert_to_cwh(proposals)
         boxes = post.decode_boxes(reg, proposals, mults=(0.1, 0.2), clamp=True)
-        boxes = post.clamp_to_canvas_vect(boxes, imsizes, imidx)
+        boxes = post.clamp_to_canvas(boxes, imsizes, imidx)
         boxes, scr, cls, imidx = post.remove_small(boxes, cfg['min_size2'], scr, cls, imidx)
         
         res = []

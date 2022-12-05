@@ -1,8 +1,7 @@
-import cv2
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.ops
 
 from .operations import prep, post
 from .components.fpn import FeaturePyramidNetwork
@@ -104,7 +103,7 @@ class RetinaFace_Biubug6(nn.Module):
         
         scr = F.softmax(cls, dim=-1)[:, :, 1]
         priors = post.get_priors(x.shape[2:], self.bases, dv, loc='center')
-        b, s, _ = post.get_results(reg, scr, priors, 0.02, 0.4, decode=(0.1, 0.2))
+        b, s = post.get_results(reg, scr, priors, 0.02, 0.4, decode_mults=(0.1, 0.2))
         b, s = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s]]
         return b, s
 
@@ -140,11 +139,11 @@ class RetinaFace_BBT(nn.Module):
         reg = torch.cat([self.heads_boxes[i](xs[i]) for i in range(len(xs))], dim=1)
         cls = torch.cat([self.heads_class[i](xs[i]) for i in range(len(xs))], dim=1)
              
-        scr = F.softmax(cls, dim=-1)[:, :, 1]
         priors = post.get_priors(x.shape[2:], self.bases, dv, loc='center')
-        b, s, _ = post.get_results(reg, scr, priors, 0.5, 0.4, decode=(0.1, 0.2))
+        scores = F.softmax(cls, dim=-1)[:, :, 1]
+        b, s = post.get_results(reg, scores, priors, 0.5, 0.4, decode_mults=(0.1, 0.2))
         b, s = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s]]
-        return b, s
+        return b, s   
 
     links = {
         'resnet152_mixed': '1xB5RO99bVnXLYesnilzaZL2KWz4BsJfM',
@@ -177,7 +176,11 @@ class RetinaNet_TorchVision(nn.Module):
         backbone = ResNet50(return_count=3, bn_eps=0.0)
         cins = [512, 1024, 2048]
         cout = 256
-        anchors_per_level = 9
+        strides = [8, 16, 32, 64, 128]
+        astarts = [32, 64, 128, 256, 512]
+        anchors = post.make_anchors(astarts, [1, 2**(1/3), 2**(2/3)], [2, 1, 0.5], rounding=True)
+        self.bases = list(zip(strides, anchors))
+        anchors_per_level = len(anchors[0])
         self.num_classes = 91
         self.body = backbone
         self.fpn = FeaturePyramidNetwork(cins, cout, None, None, P6='fromP5', P7=True, smoothP5=True)
@@ -187,7 +190,7 @@ class RetinaNet_TorchVision(nn.Module):
         if pretrained:
             load_weights(self, self.link, 'resnet50_coco', device, add_num_batches=True)
     
-    def forward(self, imgs, score_thr=0.05, iou_thr=0.5, post_impl='vectorized'):
+    def forward(self, imgs):
         dv = next(self.parameters()).device
         x, sz_orig, sz_used = prep.full(imgs, dv, (800, 1333), 'torch', norm='imagenet')
         
@@ -195,23 +198,31 @@ class RetinaNet_TorchVision(nn.Module):
         xs = self.fpn(xs)
         reg = [self.reg_head(lvl) for lvl in xs]
         log = [self.cls_head(lvl) for lvl in xs]
-        #lsz = [lvl.shape[1] for lvl in log]
-        #reg = torch.cat(reg, axis=1)
-        #scr = torch.cat(log, axis=1).sigmoid_()
-
-        priors = post.get_priors(x.shape[2:], self.get_bases(), dv, 'corner', 'fit')
-        #b, s, c = post.get_results(
-        #    reg, scr, priors, score_thr, iou_thr, decode=(1, 1, True),
-        #    lvtop=1000, lvsizes=lsz, multiclassbox=True, imtop=300, implementation=post_impl,
-        #    scale=True, clamp=True, sizes_used=sz_used, sizes_orig=sz_orig)
-
-
-
+        reg = torch.cat(reg, axis=1)
+        scr = torch.cat(log, axis=1).sigmoid_()
+        
+        lvlen = [lvl.shape[1] for lvl in log]
+        priors = post.get_priors(x.shape[2:], self.bases, dv, 'corner', 'fit')
+        b, s, c = self.postprocess(reg, scr, priors, lvlen, sz_used)
+        b = post.scale_back(b, sz_orig, sz_used)
         b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
         return b, s, c
 
-    def get_bases(self):
-        strides = [8, 16, 32, 64, 128]
-        astarts = [32, 64, 128, 256, 512]
-        anchors = post.make_anchors(astarts, [1, 2**(1/3), 2**(2/3)], [2, 1, 0.5], rounding=True)
-        return list(zip(strides, anchors))
+    def postprocess(self, reg, scr, priors, lvlen, sz_used):
+        n, dim, num_classes = scr.shape
+        reg, scr = reg.reshape(-1, 4), scr.flatten()
+        fidx = torch.nonzero(scr > 0.05).squeeze()
+        fidx = post.top_per_level(fidx, scr, 1000, lvlen, n, mult=num_classes)
+        scores = scr[fidx]
+        classes = fidx % num_classes
+        idx = torch.div(fidx, num_classes, rounding_mode='floor')
+        imidx = idx.div(dim, rounding_mode='floor')
+        
+        boxes = post.decode_boxes(reg[idx], priors[idx % dim], mults=(1, 1), clamp=True)
+        boxes = post.clamp_to_canvas(boxes, sz_used, imidx)
+        res = []
+        for i in range(n):
+            bi, si, ci = [x[imidx == i] for x in [boxes, scores, classes]]
+            keep = torchvision.ops.batched_nms(bi, si, ci, 0.5)[:300]
+            res.append((bi[keep], si[keep], ci[keep]))
+        return map(list, zip(*res))

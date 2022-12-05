@@ -40,10 +40,8 @@ class Detector():
         
         self.model.eval()
 
-    def __call__(self, imgs, post_impl=None):
+    def __call__(self, imgs):
         with torch.inference_mode():
-            if post_impl:
-                return self.model(imgs, post_impl=post_impl)
             return self.model(imgs)
 
 
