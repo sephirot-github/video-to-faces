@@ -9,7 +9,8 @@ import torch.nn.functional as F
 
 def full(imgs, dv, resize, resize_with='cv2', norm='imagenet'):
     assert resize_with in ['cv2', 'torch']
-    rmin, rmax = resize
+    rmin = resize[0] if isinstance(resize, tuple) else resize
+    rmax = resize[1] if isinstance(resize, tuple) else resize
     if resize_with == 'cv2':
         imgs, sz_orig, sz_used = resize_cv2(imgs, rmin, rmax)
         ts = to_tensors(imgs, dv, norm=norm)
@@ -32,9 +33,13 @@ def to_tensors(cv2_images, device, norm, to0_1=True, toRGB=True):
         if toRGB:
             t = t[:, :, [2, 1, 0]]
         if means:
-            t -= torch.tensor(list(means), device=device)
+            if isinstance(means, tuple):
+                means = list(means)
+            t -= torch.tensor(means, device=device)
         if stdvs:
-            t /= torch.tensor(list(stdvs), device=device)
+            if isinstance(stdvs, tuple):
+                stdvs = list(stdvs)
+            t /= torch.tensor(stdvs, device=device)
         ts.append(t.permute(2, 0, 1))
     return ts
 

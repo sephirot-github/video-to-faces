@@ -13,7 +13,9 @@ class TestYOLOv3(unittest.TestCase):
         model = Detector(detmodels.YOLOv3_Anime)
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'anime_det_%u.jpg' % i)) for i in [1, 2, 3, 4]]
-        res = model(imgs)
+        res, _ = model(imgs)
+        #b, s, _ = model(imgs)
+        #res = [np.hstack([b[i], s[i][:, None]]) for i in range(len(b))]
         self.assertEqual(len(res), 4)
         self.assertEqual(res[0].shape, (12, 5))
         self.assertEqual(res[1].shape, (69, 5))
@@ -29,7 +31,9 @@ class TestYOLOv3(unittest.TestCase):
         model = Detector(detmodels.YOLOv3_Wider)
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [1, 2, 3, 4]]
-        res = model(imgs)
+        res, _ = model(imgs)
+        #b, s, _ = model(imgs)
+        #res = [np.hstack([b[i], s[i][:, None]]) for i in range(len(b))]
         self.assertEqual(len(res), 4)
         self.assertEqual(res[0].shape, (14, 5))
         self.assertEqual(res[1].shape, (5, 5))

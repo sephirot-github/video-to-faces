@@ -12,17 +12,18 @@ except ImportError:
   
 from .utils import tqdm, resize_keep_ratio
 from .dupes import ahash, remove_dupes_nearest, remove_dupes_overall
-from .detectors.yolo import YOLOv3Detector, YOLOv3DetectorAnime
+#from .detectors.yolo import YOLOv3Detector, YOLOv3DetectorAnime
 from .detectors.mtcnn import MTCNNDetector
 
 
 def get_detector_model(style, det_model, device):
     """TBD"""
-    if style == 'anime':
-        return YOLOv3DetectorAnime(device)
-    elif det_model == 'mtcnn':
-        return MTCNNDetector(device)
-    return YOLOv3Detector(device)
+    #if style == 'anime':
+    #    return YOLOv3DetectorAnime(device)
+    #elif det_model == 'mtcnn':
+    #    return MTCNNDetector(device)
+    #return YOLOv3Detector(device)
+    return 0
     
     
 def detect_faces(files, model, vid_params, det_params, save_params, hash_thr):
