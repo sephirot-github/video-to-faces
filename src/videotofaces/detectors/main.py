@@ -50,6 +50,7 @@ class detmodels(Enum):
     FasterRCNN_TorchVision_MobileNetV3L_HiRes = auto()
     FasterRCNN_TorchVision_MobileNetV3L_LoRes = auto()
     FasterRCNN_MMDet_ResNet50 = auto()
+    FasterRCNN_MMDet_ResNet50_AnimeFaces = auto()
     RetinaNet = auto()
     RetinaFace_Biubug6_MobileNet = auto()
     RetinaFace_Biubug6_ResNet50 = auto()

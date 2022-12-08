@@ -162,23 +162,24 @@ class YOLOv3(nn.Module):
         priors = post.get_priors(x.shape[-2:], self.bases, 'cpu', 'center')
         b, s, c = self.postprocess(xs, priors, self.num_classes)
         b = post.scale_back(b, szo, sz)
+        b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
         return b, s, c
 
     def postprocess(self, pred_maps, priors, num_classes):
         maps = [m.permute(0, 2, 3, 1).reshape(m.shape[0], -1, num_classes + 5) for m in pred_maps]
         map_sizes = [m.shape[1] for m in maps]
         maps = torch.cat(maps, dim=1)
-        bbox_regression = maps[..., :4]
-        objectness_value = maps[..., 4].sigmoid()
-        scores_per_class = maps[..., 5:].sigmoid()
-        scores, classes = torch.max(scores_per_class, dim=-1)
+        reg = maps[..., :4]
+        obj = maps[..., 4].sigmoid()
+        scr = maps[..., 5:].sigmoid()
       
-        n, dim = scores.shape[:2]
-        reg = bbox_regression.reshape(-1, 4)
-        o, s, c = [x.flatten() for x in [objectness_value, scores, classes]]
-        idx = torch.nonzero((o >= 0.005) * (s > 0.05)).squeeze()
-        o, s, c = [x[idx] for x in [o, s, c]]
-        s *= o
+        n, dim, num_classes = scr.shape
+        obj = obj.unsqueeze(-1).expand(-1, -1, num_classes).flatten()
+        reg, scr = reg.reshape(-1, 4), scr.flatten()
+        fidx = torch.nonzero((obj >= 0.005) * (scr > 0.05)).squeeze()
+        s = scr[fidx] * obj[fidx]
+        c = fidx % num_classes
+        idx = torch.div(fidx, num_classes, rounding_mode='floor')
         imidx = idx.div(dim, rounding_mode='floor')
 
         strides = [bs[0] for bs in self.bases]
@@ -189,11 +190,11 @@ class YOLOv3(nn.Module):
         res = []
         for i in range(n):
             bi, si, ci = [x[imidx == i] for x in [b, s, c]]
-            keep = torchvision.ops.batched_nms(bi, si, ci, 0.45)
+            keep = torchvision.ops.batched_nms(bi, si, ci, 0.45)[:100]
             res.append((bi[keep], si[keep], ci[keep]))
-        return map(list, zip(*res))
+        b, s, c = map(list, zip(*res))
         #k = imidx * 1000 + c
         #keep = torchvision.ops.batched_nms(b, s, k, 0.45)
         #b, s, c, imidx = [x[keep] for x in [b, s, c, imidx]]
         #b, s, c = [[x[imidx == i] for i in range(n)] for x in [b, s, c]]
-        #return b, s, c
+        return b, s, c

@@ -122,6 +122,8 @@ class FasterRCNN(nn.Module):
         'tv_mobilenetv3l_lores': thub + 'fasterrcnn_mobilenet_v3_large_320_fpn-907ea3f9.pth',
         'mm_resnet50': mmhub + 'faster_rcnn/faster_rcnn_r50_fpn_mstrain_3x_coco/'\
                                'faster_rcnn_r50_fpn_mstrain_3x_coco_20210524_110822-e10bd31c.pth',
+        'mm_resnet50_animefaces': 'https://github.com/hysts/anime-face-detector/'\
+                                  'releases/download/v0.0.1/mmdet_anime-face_faster-rcnn.pth'
     }
 
     def tv_conversion(self, wd):
@@ -187,6 +189,8 @@ class FasterRCNN(nn.Module):
             cfg.update(fpn_batchnorm=1e-5, rpn_convdepth=2, roi_convdepth=4, roi_mlp_depth=1)
         if src == 'tv' and arch == 'mobilenetv3l' and version == 'lores':
             cfg.update(resize_min=320, resize_max=640, lvtop=150, imtop1=150, score_thr1=0.05)
+        if version == 'animefaces':
+            cfg.update(num_classes=1)
         return cfg
 
     def get_backbone(self, cfg):

@@ -29,7 +29,7 @@ def clamp_to_canvas(boxes, imsizes, imidx):
 def remove_small(boxes, min_size, *args):
     ws = boxes[:, 2] - boxes[:, 0]
     hs = boxes[:, 3] - boxes[:, 1]
-    mask = (ws >= min_size) & (hs >= min_size)
+    mask = (ws > min_size) & (hs > min_size)
     #keep = (boxes[:, 2:] - boxes[:, :2] >= min_size).all(dim=1)
     if torch.count_nonzero(mask) < boxes.shape[0]:
         boxes = boxes[mask]
