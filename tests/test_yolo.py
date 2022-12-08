@@ -13,9 +13,8 @@ class TestYOLOv3(unittest.TestCase):
         model = Detector(detmodels.YOLOv3_Anime)
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'anime_det_%u.jpg' % i)) for i in [1, 2, 3, 4]]
-        res, _ = model(imgs)
-        #b, s, _ = model(imgs)
-        #res = [np.hstack([b[i], s[i][:, None]]) for i in range(len(b))]
+        b, s, _ = model(imgs)
+        res = [np.hstack([b[i], s[i][:, None]]) for i in range(len(b))]
         self.assertEqual(len(res), 4)
         self.assertEqual(res[0].shape, (12, 5))
         self.assertEqual(res[1].shape, (69, 5))
@@ -31,16 +30,15 @@ class TestYOLOv3(unittest.TestCase):
         model = Detector(detmodels.YOLOv3_Wider)
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [1, 2, 3, 4]]
-        res, _ = model(imgs)
-        #b, s, _ = model(imgs)
-        #res = [np.hstack([b[i], s[i][:, None]]) for i in range(len(b))]
+        b, s, _ = model(imgs)
+        res = [np.hstack([b[i], s[i][:, None]]) for i in range(len(b))]
         self.assertEqual(len(res), 4)
-        self.assertEqual(res[0].shape, (14, 5))
-        self.assertEqual(res[1].shape, (5, 5))
-        self.assertEqual(res[2].shape, (98, 5))
-        self.assertEqual(res[3].shape, (33, 5))
-        np.testing.assert_almost_equal(res[0][10], np.array([287.0417, 335.0969, 353.3632, 427.1831, 0.9978]), decimal=4)
-        np.testing.assert_almost_equal(res[3][25], np.array([454.9175, 144.2412, 501.0691, 194.8282, 0.7609]), decimal=4)
+        self.assertEqual(res[0].shape, (20, 5))
+        self.assertEqual(res[1].shape, (10, 5))
+        self.assertEqual(res[2].shape, (305, 5))
+        self.assertEqual(res[3].shape, (93, 5))
+        np.testing.assert_almost_equal(res[0][10], np.array([286.4944, 335.9040, 354.3441, 426.0989, 0.9969]), decimal=4)
+        np.testing.assert_almost_equal(res[3][25], np.array([460.0020, 143.5856, 493.6367, 193.8361, 0.8309]), decimal=4)
         return
 
 

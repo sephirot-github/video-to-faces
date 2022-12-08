@@ -35,8 +35,7 @@ class Detector():
         elif architecture == 'YOLOv3':
             dataset = modelnum.name.lower().split('_')[1]
             n = 80 if dataset == 'coco' else 1
-            ethr = 0.1 if dataset == 'wider' else None
-            self.model = YOLOv3(dataset, dv, num_classes=n, extra_thr=ethr)
+            self.model = YOLOv3(dataset, dv, num_classes=n)
         
         self.model.eval()
 

@@ -160,7 +160,7 @@ def convert_to_cwh(boxes):
     return boxes
 
 
-def decode_boxes(pred, priors, mults, clamp=False):
+def decode_boxes(pred, priors, mults=(1, 1), clamp=False, mode='rcnn', strides=None):
     """Converts predicted boxes from network outputs into actual image coordinates based on some
     fixed starting ``priors`` using Eq.1-4 from here: https://arxiv.org/pdf/1311.2524.pdf
     (as linked by Fast R-CNN paper, which is in turn linked by RetinaFace paper).
@@ -170,9 +170,15 @@ def decode_boxes(pred, priors, mults, clamp=False):
     here too for scaling the numbers back). See https://github.com/rykov8/ssd_keras/issues/53 and
     https://leimao.github.io/blog/Bounding-Box-Encoding-Decoding/#Representation-Encoding-With-Variance
     """
+    assert mode in ['rcnn', 'yolo']
+    if mode == 'yolo':
+        assert mults == (1, 1), strides is not None
     mult_xy, mult_wh = mults
     max_exp_input = math.log(1000 / 16) if clamp else None
-    xys = priors[..., 2:] * mult_xy * pred[..., :2] + priors[..., :2]
+    if mode == 'rcnn':
+        xys = priors[..., 2:] * mult_xy * pred[..., :2] + priors[..., :2]
+    elif mode == 'yolo':
+        xys = strides * (pred[..., :2].sigmoid() - 0.5) + priors[..., :2]
     whs = priors[..., 2:] * exp_clamped(mult_wh * pred[..., 2:], max_exp_input)
     boxes = torch.cat([xys - whs / 2, xys + whs / 2], dim=-1)
     return boxes
