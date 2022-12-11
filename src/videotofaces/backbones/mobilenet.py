@@ -4,7 +4,10 @@ import torch.nn as nn
 from .basic import ConvUnit
 
 # V1: https://arxiv.org/abs/1704.04861
+# V2: https://arxiv.org/pdf/1801.04381
 # V3: https://arxiv.org/pdf/1905.02244
+# https://github.com/open-mmlab/mmdetection/blob/master/mmdet/models/backbones/mobilenet_v2.py
+# https://github.com/pytorch/vision/blob/main/torchvision/models/mobilenetv3.py
 
 
 class DepthwiseBlock(nn.Module):
@@ -85,7 +88,7 @@ class InvertedResidual(nn.Module):
     def __init__(self, cin, k, cmid, cout, use_se, activ, stride):
         super().__init__()
         layers = []
-        activ = 'hardswish' if activ == 'HS' else 'relu'
+        activ = activ.replace('RE', 'relu').replace('HS', 'hardswish')
         if cin != cmid:
             layers.append(ConvUnit(cin, cmid, 1, 1, 0, activ))
         layers.append(ConvUnit(cmid, cmid, k, stride, (k - 1) // 2, activ, grp=cmid))
@@ -104,9 +107,29 @@ class InvertedResidual(nn.Module):
         return y
 
 
-class MobileNetV3L(nn.Module):
+class MobileNetV2(nn.Module):
 
-    # https://github.com/pytorch/vision/blob/main/torchvision/models/mobilenetv3.py
+    def get_layer(self, t, c, n, s, cin):
+        return nn.Sequential(
+            *[InvertedResidual(cin, 3, cin*t, c, False, 'lrelu_0.1', s if i == 1 else 1)
+              for i in range(n)])
+    
+    def __init__(self):
+        super().__init__()
+        self.layers = nn.Sequential(
+            ConvUnit(3, 32, 3, 2, 1, 'lrelu_0.1'),
+            self.get_layer(1, 16, 1, 1, cin=32),
+            self.get_layer(6, 24, 2, 2, cin=16),
+            self.get_layer(6, 32, 3, 2, cin=24),
+            self.get_layer(6, 64, 4, 2, cin=32),
+            self.get_layer(6, 96, 3, 1, cin=64),
+            self.get_layer(6, 160, 3, 2, cin=96),
+            self.get_layer(6, 320, 1, 1, cin=160),
+            ConvUnit(320, 1280, 1, 1, 0, 'lrelu_0.1')
+        )
+
+
+class MobileNetV3L(nn.Module):
 
     def __init__(self, return_inter=None):
         super().__init__()

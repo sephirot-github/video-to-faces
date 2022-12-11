@@ -128,13 +128,15 @@ class YOLOv3(nn.Module):
 
     # https://becominghuman.ai/understanding-anchors-backbone-of-object-detection-using-yolo-54962f00fbbb
 
+    mmhub = 'https://download.openmmlab.com/mmdetection/v2.0/yolo/'
     links = {
         'anime': 'https://github.com/hysts/anime-face-detector/'\
                  'releases/download/v0.0.1/mmdet_anime-face_yolov3.pth',
         'wider': '1pjg1_IeAuzgRzZiY92r71uzd_amfcegu',
-        'coco': 'https://download.openmmlab.com/mmdetection/v2.0/yolo/'\
-                'yolov3_d53_mstrain-608_273e_coco/'\
-                'yolov3_d53_mstrain-608_273e_coco_20210518_115020-a2c3acb8.pth'
+        'coco': mmhub + 'yolov3_d53_mstrain-608_273e_coco/'\
+                        'yolov3_d53_mstrain-608_273e_coco_20210518_115020-a2c3acb8.pth',
+        'coco_mobile_416': mmhub + 'yolov3_mobilenetv2_mstrain-416_300e_coco/'\
+                           'yolov3_mobilenetv2_mstrain-416_300e_coco_20210718_010823-f68a07b3.pth'
     }
 
     def __init__(self, pretrained=None, device='cpu', canvas_size=608, num_classes=1): # 416, 320
