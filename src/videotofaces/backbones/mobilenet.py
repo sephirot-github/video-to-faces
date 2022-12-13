@@ -10,6 +10,23 @@ from .basic import ConvUnit
 # https://github.com/pytorch/vision/blob/main/torchvision/models/mobilenetv3.py
 
 
+class BaseMobileNet(nn.Module):
+
+    def __init__(self, retidx):
+        super().__init__()
+        self.retidx = retidx
+    
+    def forward(self, x):
+        if not self.retidx:
+            return self.layers(x)
+        xs = []
+        for i, layer in enumerate(self.layers):
+            x = layer(x)
+            if i in self.retidx:
+                xs.append(x)
+        return xs
+
+
 class DepthwiseBlock(nn.Module):
 
     def __init__(self, cin, cout, stride, relu_type, bn_eps):
@@ -23,10 +40,10 @@ class DepthwiseBlock(nn.Module):
         return x
         
 
-class MobileNetV1(nn.Module):
+class MobileNetV1(BaseMobileNet):
 
-    def __init__(self, width_multiplier, relu_type, bn_eps=1e-05, return_inter=None):
-        super(MobileNetV1, self).__init__()
+    def __init__(self, width_multiplier, relu_type, bn_eps=1e-05, retidx=None):
+        super().__init__(retidx)
         a = width_multiplier
         self.layers = nn.Sequential(
             ConvUnit(3, 32*a, 3, 2, 1, relu_type, bn_eps),
@@ -40,18 +57,6 @@ class MobileNetV1(nn.Module):
             DepthwiseBlock(512*a, 1024*a, 2, relu_type, bn_eps),
             DepthwiseBlock(1024*a, 1024*a, 1, relu_type, bn_eps)
         )
-        self.return_inter = return_inter
-
-    def forward(self, x):
-        if not self.return_inter:
-            return self.layers(x)
-        xs = []
-        for i, layer in enumerate(self.layers):
-            x = layer(x)
-            if i in self.return_inter:
-                xs.append(x)
-        xs.append(x)
-        return xs
 
 
 class SqueezeExcitation(nn.Module):
@@ -107,15 +112,16 @@ class InvertedResidual(nn.Module):
         return y
 
 
-class MobileNetV2(nn.Module):
+class MobileNetV2(BaseMobileNet):
 
     def get_layer(self, t, c, n, s, cin):
         return nn.Sequential(
-            *[InvertedResidual(cin, 3, cin*t, c, False, 'lrelu_0.1', s if i == 1 else 1)
-              for i in range(n)])
+            InvertedResidual(cin, 3, cin*t, c, False, 'lrelu_0.1', s),
+            *[InvertedResidual(c, 3, c*t, c, False, 'lrelu_0.1', 1) for i in range(1, n)]
+        )
     
-    def __init__(self):
-        super().__init__()
+    def __init__(self, retidx=None):
+        super().__init__(retidx)
         self.layers = nn.Sequential(
             ConvUnit(3, 32, 3, 2, 1, 'lrelu_0.1'),
             self.get_layer(1, 16, 1, 1, cin=32),
@@ -129,10 +135,10 @@ class MobileNetV2(nn.Module):
         )
 
 
-class MobileNetV3L(nn.Module):
+class MobileNetV3L(BaseMobileNet):
 
-    def __init__(self, return_inter=None):
-        super().__init__()
+    def __init__(self, retidx=None):
+        super().__init__(retidx)
         self.layers = nn.Sequential(
             ConvUnit(3, 16, 3, 2, 1, 'hardswish'),
             InvertedResidual( 16, 3,  16,  16, False, 'RE', 1),
@@ -152,15 +158,3 @@ class MobileNetV3L(nn.Module):
             InvertedResidual(160, 5, 960, 160, True,  'HS', 1),
             ConvUnit(160, 6*160, 1, 1, 0, 'hardswish')
         )
-        self.return_inter = return_inter
-    
-    def forward(self, x):
-        if not self.return_inter:
-            return self.layers(x)
-        xs = []
-        for i, layer in enumerate(self.layers):
-            x = layer(x)
-            if i in self.return_inter:
-                xs.append(x)
-        xs.append(x)
-        return xs

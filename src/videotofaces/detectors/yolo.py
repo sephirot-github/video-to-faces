@@ -7,6 +7,7 @@ import torchvision.ops
 
 from .operations import prep, post
 from ..backbones.basic import ConvUnit
+from ..backbones.mobilenet import MobileNetV2
 from ..utils import prep_weights_file
 from ..utils.weights import load_weights
 
@@ -59,59 +60,56 @@ class DetectionBlock(nn.Module):
 
     def __init__(self, cin, cout):
         super().__init__()
-        self.conv1 = conv_unit(cin, cout, k=1)
-        self.conv2 = conv_unit(cout, cout*2, k=3)
-        self.conv3 = conv_unit(cout*2, cout, k=1)
-        self.conv4 = conv_unit(cout, cout*2, k=3)
-        self.conv5 = conv_unit(cout*2, cout, k=1)
+        self.layers = nn.Sequential(
+            conv_unit(cin, cout, k=1),
+            conv_unit(cout, cout*2, k=3),
+            conv_unit(cout*2, cout, k=1),
+            conv_unit(cout, cout*2, k=3),
+            conv_unit(cout*2, cout, k=1)
+        )
   
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        x = self.conv4(x)
-        x = self.conv5(x)
-        return x
+        return self.layers(x)
         
 
 class YOLOv3Neck(nn.Module):
 
-    def __init__(self):
+    def __init__(self, cin, cout):
         super().__init__()
-        self.detect1 = DetectionBlock(1024, 512)
-        self.conv1 = conv_unit(512, 256, k=1)
-        self.detect2 = DetectionBlock(768, 256)
-        self.conv2 = conv_unit(256, 128, k=1)
-        self.detect3 = DetectionBlock(384, 128)
+        self.detect1 = DetectionBlock(cin[2], cout[2])
+        self.conv1 = conv_unit(cout[2], cout[1], k=1)
+        self.detect2 = DetectionBlock(cin[1] + cout[1], cout[1])
+        self.conv2 = conv_unit(cout[1], cout[0], k=1)
+        self.detect3 = DetectionBlock(cin[0] + cout[0], cout[0])
   
     def forward(self, x):
         (x1, x2, x3) = x
         y3 = self.detect1(x3)
         t = self.conv1(y3)
         t = F.interpolate(t, scale_factor=2)
-        t = torch.cat((t, x2), 1)
+        t = torch.cat((t, x2), dim=1)
         y2 = self.detect2(t)
         t = self.conv2(y2)
         t = F.interpolate(t, scale_factor=2)
-        t = torch.cat((t, x1), 1)
+        t = torch.cat((t, x1), dim=1)
         y1 = self.detect3(t)
         return (y3, y2, y1)
         
 
 class YOLOv3Head(nn.Module):
 
-    def __init__(self, num_classes):
+    def __init__(self, cin, cmid, num_classes):
         super().__init__()
         self.convs_bridge = nn.ModuleList([
-            conv_unit(512, 1024, k=3),
-            conv_unit(256, 512, k=3),
-            conv_unit(128, 256, k=3)
+            conv_unit(cin[2], cmid[2], k=3),
+            conv_unit(cin[1], cmid[1], k=3),
+            conv_unit(cin[0], cmid[0], k=3)
         ])
         cout = (num_classes + 5) * 3
         self.convs_pred = nn.ModuleList([
-            nn.Conv2d(1024, cout, 1),
-            nn.Conv2d(512, cout, 1),
-            nn.Conv2d(256, cout, 1)
+            nn.Conv2d(cmid[2], cout, 1),
+            nn.Conv2d(cmid[1], cout, 1),
+            nn.Conv2d(cmid[0], cout, 1)
         ])
   
     def forward(self, x):
@@ -133,34 +131,51 @@ class YOLOv3(nn.Module):
         'anime': 'https://github.com/hysts/anime-face-detector/'\
                  'releases/download/v0.0.1/mmdet_anime-face_yolov3.pth',
         'wider': '1pjg1_IeAuzgRzZiY92r71uzd_amfcegu',
-        'coco': mmhub + 'yolov3_d53_mstrain-608_273e_coco/'\
+        'coco_darknet': mmhub + 'yolov3_d53_mstrain-608_273e_coco/'\
                         'yolov3_d53_mstrain-608_273e_coco_20210518_115020-a2c3acb8.pth',
-        'coco_mobile_416': mmhub + 'yolov3_mobilenetv2_mstrain-416_300e_coco/'\
-                           'yolov3_mobilenetv2_mstrain-416_300e_coco_20210718_010823-f68a07b3.pth'
+        'coco_mobile2_416': mmhub + 'yolov3_mobilenetv2_mstrain-416_300e_coco/'\
+                            'yolov3_mobilenetv2_mstrain-416_300e_coco_20210718_010823-f68a07b3.pth'
+        #'coco_mobile2_320': mmhub + 
     }
+    bases = [
+        (32, [(116, 90), (156, 198), (373, 326)]),
+        (16, [(30, 61), (62, 45), (59, 119)]),
+        (8,  [(10, 13), (16, 30), (33, 23)])
+    ]
+    bases_alt = [
+        (32, [(220, 125), (128, 222), (264, 266)]),
+        (16, [(35, 87), (102, 96), (60, 170)]),
+        (8,  [(10, 15), (24, 36), (72, 42)])
+    ]
 
-    def __init__(self, pretrained=None, device='cpu', canvas_size=608, num_classes=1): # 416, 320
+    def __init__(self, backbone='darknet', canvas_size=608, num_classes=1,
+                 pretrained=None, device='cpu'):
         super().__init__()
         self.canvas_size = canvas_size
         self.num_classes = num_classes
-        self.bases = [
-            (32, [(116, 90), (156, 198), (373, 326)]),
-            (16, [(30, 61), (62, 45), (59, 119)]),
-            (8,  [(10, 13), (16, 30), (33, 23)])
-        ]
-        self.backbone = Darknet53()
-        self.neck = YOLOv3Neck()
-        self.bbox_head = YOLOv3Head(num_classes)
+        self.bases = YOLOv3.bases
+        if backbone == 'darknet':
+            self.backbone = Darknet53()
+            cbone, cneck, chead = [256, 512, 1024], [128, 256, 512], [256, 512, 1024]
+            self.norm = None
+        elif backbone == 'mobile2':
+            self.backbone = MobileNetV2([3, 5, 7])
+            cbone, cneck, chead = [32, 96, 320], [96] * 3, [96] * 3
+            self.norm = 'imagenet'
+        self.neck = YOLOv3Neck(cbone, cneck)
+        self.head = YOLOv3Head(cneck, chead, num_classes)
         if pretrained:
             sub = None if pretrained == 'wider' else 'state_dict'
-            load_weights(self, self.links[pretrained], pretrained, device, sub=sub)
+            load_weights(self, YOLOv3.links[pretrained], pretrained, device, sub=sub)
+        if pretrained == 'coco_mobile2_320':
+            self.bases = YOLOv3.bases_alt
   
     def forward(self, imgs):
         dv = next(self.parameters()).device
-        x, szo, sz = prep.full(imgs, dv, self.canvas_size, 'cv2', norm=None)
+        x, szo, sz = prep.full(imgs, dv, self.canvas_size, 'cv2', norm=self.norm)
         xs = self.backbone(x)
         xs = self.neck(xs)
-        xs = self.bbox_head(xs)
+        xs = self.head(xs)
         priors = post.get_priors(x.shape[-2:], self.bases, 'cpu', 'center')
         b, s, c = self.postprocess(xs, priors, self.num_classes)
         b = post.scale_back(b, szo, sz)

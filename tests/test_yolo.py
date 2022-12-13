@@ -40,7 +40,7 @@ class TestYOLOv3(unittest.TestCase):
         np.testing.assert_almost_equal(res[3][25], np.array([460.0020, 143.5856, 493.6367, 193.8361, 0.8309]), decimal=4)
 
     def test_coco(self):
-        model = Detector(detmodels.YOLOv3_COCO)
+        model = Detector(detmodels.YOLOv3_COCO_Darknet)
         testdir = osp.dirname(osp.realpath(__file__))
         im1 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_000139.jpg'))
         im2 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_455157.jpg'))

@@ -33,9 +33,12 @@ class Detector():
             elif source == 'bbt':
                 self.model = RetinaFace_BBT(variation == 'resnet50', '_'.join(parts[-2:]), dv)
         elif architecture == 'YOLOv3':
-            dataset = modelnum.name.lower().split('_')[1]
+            parts = modelnum.name.lower().split('_')[1:]
+            dataset = parts[0]
+            bbone = parts[1] if len(parts) > 1 else 'darknet'
+            csize = int(parts[2]) if len(parts) > 2 else 608
             n = 80 if dataset == 'coco' else 1
-            self.model = YOLOv3(dataset, dv, num_classes=n)
+            self.model = YOLOv3(bbone, csize, n, '_'.join(parts), dv)
         
         self.model.eval()
 
@@ -60,4 +63,5 @@ class detmodels(Enum):
     RetinaFace_BBT_ResNet152_Mixed = auto()
     YOLOv3_Anime = auto()
     YOLOv3_Wider = auto()
-    YOLOv3_COCO = auto()
+    YOLOv3_COCO_Darknet = auto()
+    YOLOv3_COCO_Mobile2_416 = auto()

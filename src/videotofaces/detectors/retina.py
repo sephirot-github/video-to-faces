@@ -72,7 +72,7 @@ class RetinaFace_Biubug6(nn.Module):
     def __init__(self, mobile=True, pretrained='mobilenet', device='cpu'):
         super().__init__()
         if mobile:
-            backbone = MobileNetV1(0.25, relu_type='lrelu_0.1', return_inter=[5, 11])
+            backbone = MobileNetV1(0.25, relu_type='lrelu_0.1', retidx=[5, 11, 13])
             cins, cout, activ = [64, 128, 256], 64, 'lrelu_0.1'
         else:
             backbone = ResNet50(return_count=3)

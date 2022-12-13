@@ -197,7 +197,7 @@ class FasterRCNN(nn.Module):
         if cfg['bbone'] == 'resnet50':
             return ResNet50(bn_eps=cfg['resnet_bn_eps'])
         if cfg['bbone'] == 'mobilenetv3l':
-            return MobileNetV3L([13])
+            return MobileNetV3L([13, 16])
 
     def __init__(self, pretrained='tv_resnet50_v1', device='cpu'):
         super().__init__()
