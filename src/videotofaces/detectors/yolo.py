@@ -1,3 +1,4 @@
+
 import cv2
 import numpy as np
 import torch
@@ -134,8 +135,9 @@ class YOLOv3(nn.Module):
         'coco_darknet': mmhub + 'yolov3_d53_mstrain-608_273e_coco/'\
                         'yolov3_d53_mstrain-608_273e_coco_20210518_115020-a2c3acb8.pth',
         'coco_mobile2_416': mmhub + 'yolov3_mobilenetv2_mstrain-416_300e_coco/'\
-                            'yolov3_mobilenetv2_mstrain-416_300e_coco_20210718_010823-f68a07b3.pth'
-        #'coco_mobile2_320': mmhub + 
+                            'yolov3_mobilenetv2_mstrain-416_300e_coco_20210718_010823-f68a07b3.pth',
+        'coco_mobile2_320': mmhub + 'yolov3_mobilenetv2_320_300e_coco/'\
+                            'yolov3_mobilenetv2_320_300e_coco_20210719_215349-d18dff72.pth'
     }
     bases = [
         (32, [(116, 90), (156, 198), (373, 326)]),
@@ -189,14 +191,23 @@ class YOLOv3(nn.Module):
         reg = maps[..., :4]
         obj = maps[..., 4].sigmoid()
         scr = maps[..., 5:].sigmoid()
-      
+        
         n, dim, num_classes = scr.shape
-        obj = obj.unsqueeze(-1).expand(-1, -1, num_classes).flatten()
-        reg, scr = reg.reshape(-1, 4), scr.flatten()
-        fidx = torch.nonzero((obj >= 0.005) * (scr > 0.05)).squeeze()
-        s = scr[fidx] * obj[fidx]
-        c = fidx % num_classes
+        reg, scr, obj = reg.reshape(-1, 4), scr.reshape(-1, num_classes), obj.flatten()
+        oidx = torch.nonzero(obj >= 0.005).squeeze()
+        scr, obj = scr[oidx], obj[oidx]
+        s = scr.flatten()
+        fidx = torch.nonzero(s > 0.05).squeeze()
         idx = torch.div(fidx, num_classes, rounding_mode='floor')
+        s = s[fidx] * obj[idx]
+        c = fidx % num_classes
+        idx = oidx[idx]
+        #obj = obj.unsqueeze(-1).expand(-1, -1, num_classes).flatten()
+        #reg, scr = reg.reshape(-1, 4), scr.flatten()
+        #fidx = torch.nonzero((obj >= 0.005) * (scr > 0.05)).squeeze()
+        #s = scr[fidx] * obj[fidx]
+        #c = fidx % num_classes
+        #idx = torch.div(fidx, num_classes, rounding_mode='floor')
         imidx = idx.div(dim, rounding_mode='floor')
 
         strides = [bs[0] for bs in self.bases]

@@ -65,3 +65,4 @@ class detmodels(Enum):
     YOLOv3_Wider = auto()
     YOLOv3_COCO_Darknet = auto()
     YOLOv3_COCO_Mobile2_416 = auto()
+    YOLOv3_COCO_Mobile2_320 = auto()

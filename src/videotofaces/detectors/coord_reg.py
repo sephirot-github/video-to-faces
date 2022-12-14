@@ -15,7 +15,7 @@ class MobileNetV1_Head212(nn.Module):
 
     def __init__(self):
         super(MobileNetV1_Head212, self).__init__()
-        self.body = MobileNetV1(0.5, relu_type='prelu', bn_eps=1e-03)
+        self.body = MobileNetV1(0.5, activ='prelu', bn=1e-03)
         self.head = nn.Sequential(
             ConvUnit(512, 64, 3, 2, 1, 'prelu', 1e-03),
             nn.Flatten(),

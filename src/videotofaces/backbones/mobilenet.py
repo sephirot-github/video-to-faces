@@ -25,37 +25,32 @@ class BaseMobileNet(nn.Module):
             if i in self.retidx:
                 xs.append(x)
         return xs
-
-
-class DepthwiseBlock(nn.Module):
-
-    def __init__(self, cin, cout, stride, relu_type, bn_eps):
-        super(DepthwiseBlock, self).__init__()
-        self.a = ConvUnit(cin, cin, 3, stride, 1, relu_type, bn_eps, grp=cin)
-        self.b = ConvUnit(cin, cout, 1, 1, 0, relu_type, bn_eps)
-
-    def forward(self, x):
-        x = self.a(x)
-        x = self.b(x)
-        return x
-        
+     
 
 class MobileNetV1(BaseMobileNet):
 
-    def __init__(self, width_multiplier, relu_type, bn_eps=1e-05, retidx=None):
+    def depthwise_block(self, cin, cout, s):
+        return nn.Sequential(
+            ConvUnit(cin, cin, 3, s, 1, self.activ, self.bn, grp=cin),
+            ConvUnit(cin, cout, 1, 1, 0, self.activ, self.bn)
+        )
+
+    def __init__(self, width_multiplier, activ, bn=1e-05, retidx=None):
         super().__init__(retidx)
         a = width_multiplier
+        self.activ = activ
+        self.bn = bn
         self.layers = nn.Sequential(
-            ConvUnit(3, 32*a, 3, 2, 1, relu_type, bn_eps),
-            DepthwiseBlock(32*a, 64*a, 1, relu_type, bn_eps),
-            DepthwiseBlock(64*a, 128*a, 2, relu_type, bn_eps),
-            DepthwiseBlock(128*a, 128*a, 1, relu_type, bn_eps),
-            DepthwiseBlock(128*a, 256*a, 2, relu_type, bn_eps),
-            DepthwiseBlock(256*a, 256*a, 1, relu_type, bn_eps),
-            DepthwiseBlock(256*a, 512*a, 2, relu_type, bn_eps),
-            *[DepthwiseBlock(512*a, 512*a, 1, relu_type, bn_eps) for _ in range(5)],
-            DepthwiseBlock(512*a, 1024*a, 2, relu_type, bn_eps),
-            DepthwiseBlock(1024*a, 1024*a, 1, relu_type, bn_eps)
+            ConvUnit(3, 32*a, 3, 2, 1, activ, bn),
+            self.depthwise_block(32*a, 64*a, 1),
+            self.depthwise_block(64*a, 128*a, 2),
+            self.depthwise_block(128*a, 128*a, 1),
+            self.depthwise_block(128*a, 256*a, 2),
+            self.depthwise_block(256*a, 256*a, 1),
+            self.depthwise_block(256*a, 512*a, 2),
+            *[self.depthwise_block(512*a, 512*a, 1) for _ in range(5)],
+            self.depthwise_block(512*a, 1024*a, 2),
+            self.depthwise_block(1024*a, 1024*a, 1)
         )
 
 
