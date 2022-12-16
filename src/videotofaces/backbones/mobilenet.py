@@ -1,33 +1,16 @@
 import torch
 import torch.nn as nn
 
-from .basic import ConvUnit
+from .basic import ConvUnit, BaseMultiReturn
 
 # V1: https://arxiv.org/abs/1704.04861
 # V2: https://arxiv.org/pdf/1801.04381
 # V3: https://arxiv.org/pdf/1905.02244
 # https://github.com/open-mmlab/mmdetection/blob/master/mmdet/models/backbones/mobilenet_v2.py
 # https://github.com/pytorch/vision/blob/main/torchvision/models/mobilenetv3.py
+  
 
-
-class BaseMobileNet(nn.Module):
-
-    def __init__(self, retidx):
-        super().__init__()
-        self.retidx = retidx
-    
-    def forward(self, x):
-        if not self.retidx:
-            return self.layers(x)
-        xs = []
-        for i, layer in enumerate(self.layers):
-            x = layer(x)
-            if i in self.retidx:
-                xs.append(x)
-        return xs
-     
-
-class MobileNetV1(BaseMobileNet):
+class MobileNetV1(BaseMultiReturn):
 
     def depthwise_block(self, cin, cout, s):
         return nn.Sequential(
@@ -107,7 +90,7 @@ class InvertedResidual(nn.Module):
         return y
 
 
-class MobileNetV2(BaseMobileNet):
+class MobileNetV2(BaseMultiReturn):
 
     def get_layer(self, t, c, n, s, cin):
         return nn.Sequential(
@@ -130,7 +113,7 @@ class MobileNetV2(BaseMobileNet):
         )
 
 
-class MobileNetV3L(BaseMobileNet):
+class MobileNetV3L(BaseMultiReturn):
 
     def __init__(self, retidx=None):
         super().__init__(retidx)

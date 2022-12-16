@@ -5,6 +5,7 @@ import torch
 from .rcnn import FasterRCNN
 from .retina import RetinaNet_TorchVision, RetinaFace_Biubug6, RetinaFace_BBT
 from .yolo import YOLOv3
+from .ssd import SSD
 
 
 class Detector():
@@ -39,6 +40,8 @@ class Detector():
             csize = int(parts[2]) if len(parts) > 2 else 608
             n = 80 if dataset == 'coco' else 1
             self.model = YOLOv3(bbone, csize, n, '_'.join(parts), dv)
+        elif architecture == 'SSD':
+            self.model = SSD()
         
         self.model.eval()
 
@@ -66,3 +69,4 @@ class detmodels(Enum):
     YOLOv3_COCO_Darknet = auto()
     YOLOv3_COCO_Mobile2_416 = auto()
     YOLOv3_COCO_Mobile2_320 = auto()
+    SSD = auto()
