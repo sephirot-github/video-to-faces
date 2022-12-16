@@ -43,7 +43,7 @@ class BaseMultiReturn(nn.Module):
     max(retidx) < last layer index, then it won't waste resources on running the remaining modules.
     """
 
-    def __init__(self, retidx):
+    def __init__(self, retidx=None):
         super().__init__()
         self.retidx = retidx
     
@@ -51,7 +51,7 @@ class BaseMultiReturn(nn.Module):
         if not self.retidx:
             return self.layers(x)
         xs = []
-        for i in range(max(self.retidx)):
+        for i in range(max(self.retidx) + 1):
             x = self.layers[i](x)
             if i in self.retidx:
                 xs.append(x)

@@ -7,30 +7,33 @@ import torch.nn.functional as F
 # source: https://github.com/pytorch/vision/blob/main/torchvision/models/detection/transform.py
 
 
-def full(imgs, dv, resize, resize_with='cv2', keep_ratio=True, norm='imagenet', size_divisible=32):
+def full(imgs, dv, resize, resize_with='cv2', keep_ratio=True, size_divisible=32,
+         means='imagenet', stdvs='imagenet', to_rgb=True):
     assert resize_with in ['cv2', 'torch']
     if not isinstance(resize, tuple):
         resize = (resize, resize)
     if resize_with == 'cv2':
         imgs, sz_orig, sz_used = resize_cv2(imgs, resize, keep_ratio)
-        ts = to_tensors(imgs, dv, norm=norm)
+        ts = to_tensors(imgs, dv, means, stdvs, to_rgb)
     elif resize_with == 'torch':
-        ts = to_tensors(imgs, dv, norm=norm)
+        ts = to_tensors(imgs, dv, means, stdvs, to_rgb)
         ts, sz_orig, sz_used = resize_torch(ts, resize, keep_ratio)
     x = pad_and_batch(ts, mult=size_divisible)
     return x, sz_orig, sz_used
 
 
-def to_tensors(cv2_images, device, norm, to0_1=True, toRGB=True):
+def to_tensors(cv2_images, device, means, stdvs, to_rgb=True):
     """"""
-    means = [0.485, 0.456, 0.406] if norm == 'imagenet' else (norm[0] if norm else None) # ~ [123.675, 116.28, 103.53]
-    stdvs = [0.229, 0.224, 0.225] if norm == 'imagenet' else (norm[1] if norm else None) # ~ [58.395, 57.12, 57.375]
+    #means = [0.485, 0.456, 0.406] if norm == 'imagenet' else (norm[0] if norm else None) # ~ [123.675, 116.28, 103.53]
+    #stdvs = [0.229, 0.224, 0.225] if norm == 'imagenet' else (norm[1] if norm else None) # ~ [58.395, 57.12, 57.375]
+    means = means if means != 'imagenet' else [123.675, 116.28, 103.53] # = [0.485, 0.456, 0.406] * 255
+    stdvs = stdvs if stdvs != 'imagenet' else [58.395, 57.12, 57.375]   # = [0.229, 0.224, 0.225] * 255
     ts = []
     for img in cv2_images:
         t = torch.from_numpy(img).to(device, torch.float32)
-        if to0_1:
-            t /= 255
-        if toRGB:
+        #if to0_1:
+        #    t /= 255
+        if to_rgb:
             t = t[:, :, [2, 1, 0]]
         if means:
             if isinstance(means, tuple):
