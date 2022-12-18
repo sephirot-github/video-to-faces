@@ -24,8 +24,6 @@ def full(imgs, dv, resize, resize_with='cv2', keep_ratio=True, size_divisible=32
 
 def to_tensors(cv2_images, device, means, stdvs, to_rgb=True):
     """"""
-    #means = [0.485, 0.456, 0.406] if norm == 'imagenet' else (norm[0] if norm else None) # ~ [123.675, 116.28, 103.53]
-    #stdvs = [0.229, 0.224, 0.225] if norm == 'imagenet' else (norm[1] if norm else None) # ~ [58.395, 57.12, 57.375]
     means = means if means != 'imagenet' else [123.675, 116.28, 103.53] # = [0.485, 0.456, 0.406] * 255
     stdvs = stdvs if stdvs != 'imagenet' else [58.395, 57.12, 57.375]   # = [0.229, 0.224, 0.225] * 255
     ts = []

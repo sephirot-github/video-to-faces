@@ -41,7 +41,11 @@ class Detector():
             n = 80 if dataset == 'coco' else 1
             self.model = YOLOv3(bbone, csize, n, '_'.join(parts), dv)
         elif architecture == 'SSD':
-            self.model = SSD()
+            parts = modelnum.name.lower().split('_')[1:]
+            canvas_size = int(parts[0])
+            source = parts[1]
+            num_classes = 90 if source == 'torchvision' else 80
+            self.model = SSD(canvas_size, num_classes, source, dv)
         
         self.model.eval()
 
@@ -69,4 +73,5 @@ class detmodels(Enum):
     YOLOv3_COCO_Darknet = auto()
     YOLOv3_COCO_Mobile2_416 = auto()
     YOLOv3_COCO_Mobile2_320 = auto()
-    SSD = auto()
+    SSD_300_TorchVision = auto()
+    SSD_300_MMDetection = auto()

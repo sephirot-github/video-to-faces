@@ -44,6 +44,8 @@ class BackboneExtended(nn.Module):
             self.l2_scale = nn.Parameter(torch.ones(512) * 20)
             self.backbone = VGG16()
             self.backbone.layers[9].ceil_mode = True   # adjusting MaxPool3
+            # the above is needed in SSD_300 to go from 75 pixels to 38 (and not 37)
+            # for other pools (and for all SSD_512), the input size will be even so it doesn't matter
             self.backbone.layers.pop(-1)               # removing MaxPool5
             self.backbone.layers.extend([
                 nn.MaxPool2d(3, 1, 1),                 # replacement for MaxPool5
@@ -89,34 +91,65 @@ class Head(nn.Module):
 
 class SSD(nn.Module):
 
-    link = 'https://download.pytorch.org/models/ssd300_vgg16_coco-b556d3b4.pth'
-    #'https://download.openmmlab.com/mmdetection/v2.0/ssd/ssd300_coco/ssd300_coco_20210803_015428-d231a06e.pth'
-    # ssdlite tv: https://download.pytorch.org/models/ssdlite320_mobilenet_v3_large_coco-a79551df.pth
+    links = {
+        'torchvision': 'https://download.pytorch.org/models/ssd300_vgg16_coco-b556d3b4.pth',
+        'mmdetection': 'https://download.openmmlab.com/mmdetection/v2.0/ssd/ssd300_coco/ssd300_coco_20210803_015428-d231a06e.pth'
+        # ssdlite tv: https://download.pytorch.org/models/ssdlite320_mobilenet_v3_large_coco-a79551df.pth
+    }
 
-    def __init__(self, pretrained=True, device='cpu'):
+    def mm_conversion(self, wd):
+        nm = 'neck.l2_norm.weight'
+        ret = {nm: wd.pop(nm)}
+        ret.update(wd)
+        return ret
+
+    def get_config(self, source):
+        cfg = {}
+        if source == 'torchvision':
+            cfg.update(wextra=None, wsub=None)
+            cfg.update(resize='torch', norm=(122.99925, 116.9991, 103.9992)) #~(0.48235, 0.45882, 0.40784)
+            cfg.update(bckg_class_first=False)
+            cfg.update(lvtop=None, cltop=400, score_thr=0.01)
+        elif source == 'mmdetection':
+            cfg.update(wextra=self.mm_conversion, wsub='state_dict')
+            cfg.update(resize='cv2', norm='imagenet')
+            cfg.update(bckg_class_first=True)
+            cfg.update(lvtop=1000, cltop=None, score_thr=0.02)
+        return cfg
+
+    def __init__(self, canvas_size, num_classes, pretrained=None, device='cpu'):
         super().__init__()
+        self.cfg = self.get_config(pretrained)
+        self.canvas_size = canvas_size
         self.backbone = BackboneExtended()
         strides = [8, 16, 32, 64, 100, 300]
-        anchors = self.get_anchors(300)
+        anchors = self.get_anchors(canvas_size)
         self.bases = list(zip(strides, anchors))
         level_dims = list(zip(self.backbone.couts, [len(a) for a in anchors]))
-        self.cls_heads = nn.ModuleList([Head(c, an, 91) for c, an in level_dims])
+        self.cls_heads = nn.ModuleList([Head(c, an, num_classes + 1) for c, an in level_dims])
         self.reg_heads = nn.ModuleList([Head(c, an, 4) for c, an in level_dims])
         if pretrained:
-            load_weights(self, self.link, 'tv', device)
+            extra, sub = self.cfg['wextra'], self.cfg['wsub']
+            load_weights(self, self.links[pretrained], pretrained, device, extra, sub)
     
     def forward(self, imgs):
         dv = next(self.parameters()).device
-        x, sz_orig, sz_used = prep.full(imgs, dv, 300, 'torch', False, 1, (122.99925, 116.9991, 103.9992), None) # = (0.48235, 0.45882, 0.40784)
+        backend, means = self.cfg['resize'], self.cfg['norm']
+        bckg_first = self.cfg['bckg_class_first']
+
+        x, sz_orig, sz_used = prep.full(imgs, dv, self.canvas_size, backend, False, 1, means, None) 
         #return x
         xs = self.backbone(x)
         #return xs
-        cls = torch.cat([self.cls_heads[i](xs[i]) for i in range(len(xs))], dim=1)
+        cls = [self.cls_heads[i](xs[i]) for i in range(len(xs))]
+        lvlen = [lvl.shape[1] for lvl in cls]
+        cls = torch.cat(cls, dim=1)
         reg = torch.cat([self.reg_heads[i](xs[i]) for i in range(len(xs))], dim=1)
-        scr = F.softmax(cls, dim=-1)[:, :, 1:]
+        scr = F.softmax(cls, dim=-1)
+        scr = scr[:, :, :-1] if bckg_first else scr[:, :, 1:]
         #return reg, cls
         priors = post.get_priors(x.shape[2:], self.bases)
-        b, s, c = self.postprocess(reg, scr, priors, sz_used)
+        b, s, c = self.postprocess(reg, scr, priors, sz_used, lvlen, self.cfg)
         b = post.scale_back(b, sz_orig, sz_used)
         b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
         return b, s, c
@@ -136,20 +169,23 @@ class SSD(nn.Module):
             anchors.append(a)
         return anchors
 
-    def postprocess(self, reg, scr, priors, sz_used):
+    def postprocess(self, reg, scr, priors, sz_used, lvlen, cfg):
         n, dim, num_classes = scr.shape
         reg, scr = reg.reshape(-1, 4), scr.flatten()
-        fidx = torch.nonzero(scr > 0.01).squeeze()
+        fidx = torch.nonzero(scr > cfg['score_thr']).squeeze()
+        fidx = post.top_per_level(fidx, scr, cfg['lvtop'], lvlen, n, mult=num_classes)
         scores = scr[fidx]
-        classes = fidx % num_classes + 1
+        classes = fidx % num_classes + (0 if self.cfg['bckg_class_first'] else 1)
         idx = torch.div(fidx, num_classes, rounding_mode='floor')
         imidx = idx.div(dim, rounding_mode='floor')
 
-        sel = post.top_per_class(scores, classes, imidx, 400)
-        scores, classes, imidx, idx = [x[sel] for x in [scores, classes, imidx, idx]]
+        if cfg['cltop']:
+            sel = post.top_per_class(scores, classes, imidx, cfg['cltop'])
+            scores, classes, imidx, idx = [x[sel] for x in [scores, classes, imidx, idx]]
         
         boxes = post.decode_boxes(reg[idx], priors[idx % dim], mults=(0.1, 0.2), clamp=True)
         boxes = post.clamp_to_canvas(boxes, sz_used, imidx)
+        boxes, scores, classes, imidx = post.remove_small(boxes, 0, scores, classes, imidx)
         res = []
         for i in range(n):
             bi, si, ci = [x[imidx == i] for x in [boxes, scores, classes]]
