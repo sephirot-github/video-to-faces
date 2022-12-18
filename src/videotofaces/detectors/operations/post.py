@@ -78,6 +78,20 @@ def top_per_level(idx, scores, limit, lvlen, nimg, mult=1):
     return torch.cat(sel)
 
 
+def top_per_class(scores, classes, imidx, limit):
+    """"""
+    sel = []
+    for c in classes.unique():
+        for i in range(torch.max(imidx) + 1):
+            cidx = torch.nonzero((classes == c) * (imidx == i)).squeeze(-1)
+            if cidx.numel() > 400:
+                _, top = torch.topk(scores[cidx], 400)
+                sel.append(cidx[top])
+            elif cidx.numel() > 0:
+                sel.append(cidx)
+    return torch.cat(sel)
+
+
 def make_anchors(dims, scales=[1], ratios=[1], rounding=False):
     """For every possible combination (D, S, R) of dims, scales and ratios,
     makes a box with area = D*D*S*S and aspect ratio = R,

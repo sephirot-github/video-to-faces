@@ -144,6 +144,9 @@ class SSD(nn.Module):
         classes = fidx % num_classes + 1
         idx = torch.div(fidx, num_classes, rounding_mode='floor')
         imidx = idx.div(dim, rounding_mode='floor')
+
+        sel = post.top_per_class(scores, classes, imidx, 400)
+        scores, classes, imidx, idx = [x[sel] for x in [scores, classes, imidx, idx]]
         
         boxes = post.decode_boxes(reg[idx], priors[idx % dim], mults=(0.1, 0.2), clamp=True)
         boxes = post.clamp_to_canvas(boxes, sz_used, imidx)
