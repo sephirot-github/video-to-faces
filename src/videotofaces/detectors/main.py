@@ -75,3 +75,4 @@ class detmodels(Enum):
     YOLOv3_COCO_Mobile2_320 = auto()
     SSD_300_TorchVision = auto()
     SSD_300_MMDetection = auto()
+    SSD_512_MMDetection = auto()
