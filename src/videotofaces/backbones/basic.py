@@ -19,6 +19,8 @@ class ConvUnit(nn.Module):
             self.activ = None
         elif activ == 'relu':
             self.activ = nn.ReLU(inplace=True)
+        elif activ == 'relu6':
+            self.activ = nn.ReLU6(inplace=True)
         elif activ == 'prelu':
             self.activ = nn.PReLU(cout)
         elif activ.startswith('lrelu'):

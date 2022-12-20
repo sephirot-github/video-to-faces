@@ -14,8 +14,12 @@ from ..utils.weights import load_weights
 # VGG paper: https://arxiv.org/pdf/1409.1556.pdf
 
 
-def ssd_convunit(cin, cout, k, s, p, d=1):
+def vgg_convunit(cin, cout, k, s, p, d=1):
     return ConvUnit(cin, cout, k, s, p, 'relu', bn=None, d=d)
+
+
+def mbnet_convunit(cin, cout, k, s, p, grp=1):
+    return ConvUnit(cin, cout, k, s, p, 'relu6', 1e-03, grp=grp)
 
 
 class VGG16(BaseMultiReturn):
@@ -28,32 +32,29 @@ class VGG16(BaseMultiReturn):
         cin = 3
         for c, n in cfg:
             for i in range(n):
-                layers.append(ssd_convunit(cin, c, 3, 1, 1))
+                layers.append(vgg_convunit(cin, c, 3, 1, 1))
                 cin = c
             layers.append(nn.MaxPool2d(2))
         self.layers = nn.Sequential(*layers)
     
     
-class BackboneExtended(nn.Module):
+class ExtendedVGG16(nn.Module):
 
-    def __init__(self, backbone='vgg16', hires=False):
+    def __init__(self, hires=False):
         super().__init__()
-        if backbone == 'mobile2':
-            self.backbone = MobileNetV2([5, 8])
-        else:
-            self.l2_scale = nn.Parameter(torch.ones(512) * 20)
-            self.backbone = VGG16()
-            self.backbone.layers[9].ceil_mode = True   # adjusting MaxPool3
-            # the above is needed in SSD_300 to go from 75 pixels to 38 (and not 37)
-            # for other pools (and for all SSD_512), the input size will be even so it doesn't matter
-            self.backbone.layers.pop(-1)               # removing MaxPool5
-            self.backbone.layers.extend([
-                nn.MaxPool2d(3, 1, 1),                 # replacement for MaxPool5
-                ssd_convunit(512, 1024, 3, 1, 6, d=6), # FC6
-                ssd_convunit(1024, 1024, 1, 1, 0)      # FC7
-            ])
-            self.backbone.retidx = [12, 19] # right before MaxPool4, last layer with extensions
-        
+        self.l2_scale = nn.Parameter(torch.ones(512) * 20)
+        self.backbone = VGG16()
+        self.backbone.layers[9].ceil_mode = True   # adjusting MaxPool3
+        # the above is needed in SSD_300 to go from 75 pixels to 38 (and not 37)
+        # for other pools (and for all SSD_512), the input size will be even so it doesn't matter
+        self.backbone.layers.pop(-1)               # removing MaxPool5
+        self.backbone.layers.extend([
+            nn.MaxPool2d(3, 1, 1),                 # replacement for MaxPool5
+            vgg_convunit(512, 1024, 3, 1, 6, d=6), # FC6
+            vgg_convunit(1024, 1024, 1, 1, 0)      # FC7
+        ])
+        self.backbone.retidx = [12, 19] # right before MaxPool4, last layer with extensions
+
         self.extra = nn.ModuleList()
         settings = [(1024, 512, 3, 2, 1), (512, 256, 3, 2, 1)]
         if not hires:
@@ -62,8 +63,8 @@ class BackboneExtended(nn.Module):
             settings.extend([(256, 256, 3, 2, 1), (256, 256, 3, 2, 1), (256, 256, 4, 1, 1)])
         for cin, cout, k, s, p in settings:
             self.extra.append(nn.Sequential(
-                ssd_convunit(cin, cout // 2, 1, 1, 0),
-                ssd_convunit(cout // 2, cout, k, s, p)
+                vgg_convunit(cin, cout // 2, 1, 1, 0),
+                vgg_convunit(cout // 2, cout, k, s, p)
             ))
         self.couts = [512, 1024] + [s[1] for s in settings]
 
@@ -78,14 +79,47 @@ class BackboneExtended(nn.Module):
         return xs
 
 
-class Head(nn.Module):
+class ExtendedMobileNet(nn.Module):
 
-    def __init__(self, cin, num_anchors, task_len):
+    def __init__(self):
+        super().__init__()
+        self.backbone = MobileNetV2([5, 8], 'relu6', 1e-03)
+        self.extra = nn.ModuleList()
+        settings = [(1280, 512), (512, 256), (256, 256), (256, 128)]
+        for cin, cout in settings:
+            cmid = cout // 2
+            self.extra.append(nn.Sequential(
+                mbnet_convunit(cin, cmid, 1, 1, 0),
+                nn.Sequential(
+                    mbnet_convunit(cmid, cmid, 3, 2, 1, grp=cmid),
+                    mbnet_convunit(cmid, cout, 1, 1, 0)
+                )
+            ))
+        self.couts = [96, 1280] + [s[1] for s in settings]
+
+    def forward(self, x):
+        xs = self.backbone(x)
+        x = xs[1]
+        for block in self.extra:
+            x = block(x)
+            xs.append(x)
+        return xs
+
+
+class SSDHead(nn.Module):
+
+    def __init__(self, bbone, c, num_anchors, task_len):
         super().__init__()
         self.task_len = task_len
-        self.conv = nn.Conv2d(cin, num_anchors * task_len, 3, 1, 1)
+        k = 3
+        if bbone != 'vgg16':
+            self.prep = mbnet_convunit(c, c, 3, 1, 1, grp=c)
+            k = 1
+        self.conv = nn.Conv2d(c, num_anchors * task_len, k, 1, (k-1)//2)
     
     def forward(self, x):
+        if hasattr(self, 'prep'):
+            x = self.prep(x)
         x = self.conv(x).permute(0, 2, 3, 1)
         x = x.reshape(x.shape[0], -1, self.task_len)
         return x
@@ -93,56 +127,64 @@ class Head(nn.Module):
 
 class SSD(nn.Module):
 
+    tvhub = 'https://download.pytorch.org/models/'
     mmhub = 'https://download.openmmlab.com/mmdetection/v2.0/ssd/'
     links = {
-        '300_torchvision': 'https://download.pytorch.org/models/ssd300_vgg16_coco-b556d3b4.pth',
-        '300_mmdetection': mmhub + 'ssd300_coco/ssd300_coco_20210803_015428-d231a06e.pth',
-        '512_mmdetection': mmhub + 'ssd512_coco/ssd512_coco_20210803_022849-0a47a1ca.pth'
-        # ssdlite tv: https://download.pytorch.org/models/ssdlite320_mobilenet_v3_large_coco-a79551df.pth
+        'vgg16_300_tv': tvhub + 'ssd300_vgg16_coco-b556d3b4.pth',
+        'vgg16_300_mm': mmhub + 'ssd300_coco/ssd300_coco_20210803_015428-d231a06e.pth',
+        'vgg16_512_mm': mmhub + 'ssd512_coco/ssd512_coco_20210803_022849-0a47a1ca.pth',
+        'mobile2_320_mm': mmhub + 'ssdlite_mobilenetv2_scratch_600e_coco/ssdlite_mobilenetv2_scratch_600e_coco_20210629_110627-974d9307.pth',
+        'mobile3_320_tv': tvhub + 'ssdlite320_mobilenet_v3_large_coco-a79551df.pth'
     }
 
-    def mm_conversion(self, wd):
+    def mm_vgg_conversion(self, wd):
         nm = 'neck.l2_norm.weight'
         ret = {nm: wd.pop(nm)}
         ret.update(wd)
         return ret
 
-    def get_config(self, source):
+    def get_config(self, bbone, csize, source):
         cfg = {}
-        if source == 'torchvision':
+        if source == 'tv':
             cfg.update(wextra=None, wsub=None)
-            cfg.update(resize='torch', norm=(122.99925, 116.9991, 103.9992)) #~(0.48235, 0.45882, 0.40784)
+            cfg.update(resize='torch', stdvs=None, means=(122.99925, 116.9991, 103.9992)) #~(0.48235, 0.45882, 0.40784)
             cfg.update(bckg_class_first=False)
             cfg.update(anchors_rounding=False, anchors_clamp=True)
             cfg.update(lvtop=None, cltop=400, score_thr=0.01)
-        elif source == 'mmdetection':
-            cfg.update(wextra=self.mm_conversion, wsub='state_dict')
-            cfg.update(resize='cv2', norm='imagenet')
+        elif source == 'mm':
+            cfg.update(wextra=None, wsub='state_dict')
+            cfg.update(resize='cv2', stdvs=None, means='imagenet')
             cfg.update(bckg_class_first=True)
             cfg.update(anchors_rounding=True, anchors_clamp=False)
             cfg.update(lvtop=1000, cltop=None, score_thr=0.02)
+            if bbone == 'vgg16':
+                cfg.update(wextra=self.mm_vgg_conversion)
+            else:
+                cfg.update(stdvs='imagenet')
         return cfg
 
-    def __init__(self, canvas_size, num_classes, pretrained=None, device='cpu'):
+    def __init__(self, backbone, canvas_size, num_classes, pretrained=None, device='cpu'):
         super().__init__()
-        self.cfg = self.get_config(pretrained)
+        self.cfg = self.get_config(*pretrained.split('_'))
         self.canvas_size = canvas_size
-        self.backbone = BackboneExtended(hires=canvas_size == 512)
+        if backbone == 'vgg16':
+            self.backbone = ExtendedVGG16(canvas_size == 512)
+        else:
+            self.backbone = ExtendedMobileNet()
         self.bases, num_anchors_per_level = self.get_bases(canvas_size, self.cfg)
         level_dims = list(zip(self.backbone.couts, num_anchors_per_level))
-        self.cls_heads = nn.ModuleList([Head(c, an, num_classes + 1) for c, an in level_dims])
-        self.reg_heads = nn.ModuleList([Head(c, an, 4) for c, an in level_dims])
+        self.cls_heads = nn.ModuleList([SSDHead(backbone, c, an, num_classes + 1) for c, an in level_dims])
+        self.reg_heads = nn.ModuleList([SSDHead(backbone, c, an, 4) for c, an in level_dims])
         if pretrained:
-            link = str(canvas_size) + '_' + pretrained
             extra, sub = self.cfg['wextra'], self.cfg['wsub']
-            load_weights(self, self.links[link], link, device, extra, sub)
+            load_weights(self, self.links[pretrained], pretrained, device, extra, sub)
     
     def forward(self, imgs):
         dv = next(self.parameters()).device
-        backend, means = self.cfg['resize'], self.cfg['norm']
+        backend, means, stdvs = self.cfg['resize'], self.cfg['means'], self.cfg['stdvs']
         bckg_first = self.cfg['bckg_class_first']
 
-        x, sz_orig, sz_used = prep.full(imgs, dv, self.canvas_size, backend, False, 1, means, None)
+        x, sz_orig, sz_used = prep.full(imgs, dv, self.canvas_size, backend, False, 1, means, stdvs)
         #return x
         xs = self.backbone(x)
         #return xs
@@ -168,16 +210,17 @@ class SSD(nn.Module):
             strides = [8, 16, 32, 64, 128, 256, 512]
             scales = [0.04, 0.10, 0.26, 0.42, 0.58, 0.74, 0.9, 1.06] # [0.04] + np.linspace(0.10, 1.06, 7)
             ar3_idx = [1, 2, 3, 4]
-        else:
-            #img_size = 320
-            #strides=[16, 32, 64, 107, 160, 320],
-            #ratios=[[2, 3], [2, 3], [2, 3], [2, 3], [2, 3], [2, 3]],
+        elif img_size == 320:
+            strides = [16, 32, 64, 107, 160, 320]
+            scales = [0.15, 0.313, 0.47, 0.632, 0.792, 0.95, 1]
+            ar3_idx = [0, 1, 2, 3, 4, 5]
             #min_sizes=[48, 100, 150, 202, 253, 304],
             #max_sizes=[100, 150, 202, 253, 304, 320]
             # 0.15, 0.3125, 0.46875, 0.63125, 0.790625, 0.95, 1
             # 0.1625, 0.15625, 0.1625, 0.159375, 0.159375
             #[0.15, 0.3125, 0.47, 0.63, 0.79, 0.95] == np.linspace(0.15, 0.95, 6), 0.31 -> 0.3125
             #[0.15, 0.3125, 0.47, 0.63, 0.79, 0.95, 1.11] == np.linspace(0.15, 1.11, 7), clamp=True
+        else:
             raise ValueError(img_size)
         anchors = []
         for i in range(len(strides)):

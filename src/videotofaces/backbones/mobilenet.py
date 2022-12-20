@@ -68,17 +68,17 @@ def make_divisable(v, divisor, min_value=None):
 
 class InvertedResidual(nn.Module):
 
-    def __init__(self, cin, k, cmid, cout, use_se, activ, stride):
+    def __init__(self, cin, k, cmid, cout, use_se, activ, bn, stride):
         super().__init__()
         layers = []
         activ = activ.replace('RE', 'relu').replace('HS', 'hardswish')
         if cin != cmid:
-            layers.append(ConvUnit(cin, cmid, 1, 1, 0, activ))
-        layers.append(ConvUnit(cmid, cmid, k, stride, (k - 1) // 2, activ, grp=cmid))
+            layers.append(ConvUnit(cin, cmid, 1, 1, 0, activ, bn))
+        layers.append(ConvUnit(cmid, cmid, k, stride, (k - 1) // 2, activ, bn, grp=cmid))
         if use_se:
             csq = make_divisable(cmid // 4, divisor=8)
             layers.append(SqueezeExcitation(cmid, csq))
-        layers.append(ConvUnit(cmid, cout, 1, 1, 0, None))
+        layers.append(ConvUnit(cmid, cout, 1, 1, 0, None, bn))
         
         self.block = nn.Sequential(*layers)
         self.residual = stride == 1 and cin == cout
@@ -94,14 +94,16 @@ class MobileNetV2(BaseMultiReturn):
 
     def get_layer(self, t, c, n, s, cin):
         return nn.Sequential(
-            InvertedResidual(cin, 3, cin*t, c, False, 'lrelu_0.1', s),
-            *[InvertedResidual(c, 3, c*t, c, False, 'lrelu_0.1', 1) for i in range(1, n)]
+            InvertedResidual(cin, 3, cin*t, c, False, self.activ, self.bn, s),
+            *[InvertedResidual(c, 3, c*t, c, False, self.activ, self.bn, 1) for i in range(1, n)]
         )
     
-    def __init__(self, retidx=None):
+    def __init__(self, retidx=None, activ='lrelu_0.1', bn=1e-05):
         super().__init__(retidx)
+        self.activ = activ
+        self.bn = bn
         self.layers = nn.Sequential(
-            ConvUnit(3, 32, 3, 2, 1, 'lrelu_0.1'),
+            ConvUnit(3, 32, 3, 2, 1, activ, bn),
             self.get_layer(1, 16, 1, 1, cin=32),
             self.get_layer(6, 24, 2, 2, cin=16),
             self.get_layer(6, 32, 3, 2, cin=24),
@@ -109,30 +111,30 @@ class MobileNetV2(BaseMultiReturn):
             self.get_layer(6, 96, 3, 1, cin=64),
             self.get_layer(6, 160, 3, 2, cin=96),
             self.get_layer(6, 320, 1, 1, cin=160),
-            ConvUnit(320, 1280, 1, 1, 0, 'lrelu_0.1')
+            ConvUnit(320, 1280, 1, 1, 0, activ, bn)
         )
 
 
 class MobileNetV3L(BaseMultiReturn):
 
-    def __init__(self, retidx=None):
+    def __init__(self, retidx=None, bn=1e-05):
         super().__init__(retidx)
         self.layers = nn.Sequential(
-            ConvUnit(3, 16, 3, 2, 1, 'hardswish'),
-            InvertedResidual( 16, 3,  16,  16, False, 'RE', 1),
-            InvertedResidual( 16, 3,  64,  24, False, 'RE', 2), # C1
-            InvertedResidual( 24, 3,  72,  24, False, 'RE', 1),
-            InvertedResidual( 24, 5,  72,  40, True,  'RE', 2), # C2
-            InvertedResidual( 40, 5, 120,  40, True,  'RE', 1),
-            InvertedResidual( 40, 5, 120,  40, True,  'RE', 1),
-            InvertedResidual( 40, 3, 240,  80, False, 'HS', 2), # C3
-            InvertedResidual( 80, 3, 200,  80, False, 'HS', 1),
-            InvertedResidual( 80, 3, 184,  80, False, 'HS', 1),
-            InvertedResidual( 80, 3, 184,  80, False, 'HS', 1),
-            InvertedResidual( 80, 3, 480, 112, True,  'HS', 1),
-            InvertedResidual(112, 3, 672, 112, True,  'HS', 1),
-            InvertedResidual(112, 5, 672, 160, True,  'HS', 2), # C4
-            InvertedResidual(160, 5, 960, 160, True,  'HS', 1),
-            InvertedResidual(160, 5, 960, 160, True,  'HS', 1),
-            ConvUnit(160, 6*160, 1, 1, 0, 'hardswish')
+            ConvUnit(3, 16, 3, 2, 1, 'hardswish', bn),
+            InvertedResidual( 16, 3,  16,  16, False, 'RE', bn, 1),
+            InvertedResidual( 16, 3,  64,  24, False, 'RE', bn, 2), # C1
+            InvertedResidual( 24, 3,  72,  24, False, 'RE', bn, 1),
+            InvertedResidual( 24, 5,  72,  40, True,  'RE', bn, 2), # C2
+            InvertedResidual( 40, 5, 120,  40, True,  'RE', bn, 1),
+            InvertedResidual( 40, 5, 120,  40, True,  'RE', bn, 1),
+            InvertedResidual( 40, 3, 240,  80, False, 'HS', bn, 2), # C3
+            InvertedResidual( 80, 3, 200,  80, False, 'HS', bn, 1),
+            InvertedResidual( 80, 3, 184,  80, False, 'HS', bn, 1),
+            InvertedResidual( 80, 3, 184,  80, False, 'HS', bn, 1),
+            InvertedResidual( 80, 3, 480, 112, True,  'HS', bn, 1),
+            InvertedResidual(112, 3, 672, 112, True,  'HS', bn, 1),
+            InvertedResidual(112, 5, 672, 160, True,  'HS', bn, 2), # C4
+            InvertedResidual(160, 5, 960, 160, True,  'HS', bn, 1),
+            InvertedResidual(160, 5, 960, 160, True,  'HS', bn, 1),
+            ConvUnit(160, 6*160, 1, 1, 0, 'hardswish', bn)
         )

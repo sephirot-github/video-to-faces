@@ -19,7 +19,7 @@ class TestSSD(unittest.TestCase):
         return b, s, l
 
     def test_ssd_300_torchvision(self):
-        b, s, l = self._run_inference(detmodels.SSD_300_TorchVision)
+        b, s, l = self._run_inference(detmodels.SSD_VGG16_300_TV)
         self.assertEqual((b[0].shape, s[0].shape), ((200, 4), (200,)))
         self.assertEqual((b[1].shape, l[1].shape), ((200, 4), (200,)))
         np.testing.assert_almost_equal(b[0][100], np.array([63.50, 300.53, 417.14, 390.15]), decimal=2)
@@ -32,7 +32,7 @@ class TestSSD(unittest.TestCase):
         np.testing.assert_equal(l[1][45:60], np.array([15, 33, 15, 1, 67, 1, 1, 1, 1, 1, 31, 15, 67, 1, 15]))
 
     def test_ssd_300_mmdetection(self):
-        b, s, l = self._run_inference(detmodels.SSD_300_MMDetection)
+        b, s, l = self._run_inference(detmodels.SSD_VGG16_300_MM)
         self.assertEqual((b[0].shape, s[0].shape), ((200, 4), (200,)))
         self.assertEqual((b[1].shape, l[1].shape), ((200, 4), (200,)))
         np.testing.assert_almost_equal(b[0][100], np.array([425.72, 264.66, 439.83, 304.39]), decimal=2)
@@ -45,7 +45,7 @@ class TestSSD(unittest.TestCase):
         np.testing.assert_equal(l[1][50:65], np.array([25, 25, 25, 73, 25, 60, 0, 56, 24, 56, 60, 0, 73, 56, 25]))
 
     def test_ssd_512_mmdetection(self):
-        b, s, l = self._run_inference(detmodels.SSD_512_MMDetection)
+        b, s, l = self._run_inference(detmodels.SSD_VGG16_512_MM)
         self.assertEqual((b[0].shape, s[0].shape), ((200, 4), (200,)))
         self.assertEqual((b[1].shape, l[1].shape), ((200, 4), (200,)))
         np.testing.assert_almost_equal(b[0][75], np.array([275.15, 211.36, 372.67, 231.54]), decimal=2)
@@ -56,6 +56,19 @@ class TestSSD(unittest.TestCase):
         np.testing.assert_almost_equal(s[1][44:49], np.array([0.0771, 0.0764, 0.0760, 0.0756, 0.0756]), decimal=4)
         np.testing.assert_equal(l[0][116:131], np.array([0, 73, 58, 60, 56, 56, 0, 56, 60, 56, 60, 56, 73, 60, 56]))
         np.testing.assert_equal(l[1][32:47], np.array([0, 13, 73, 0, 13, 60, 73, 13, 13, 13, 73, 13, 0, 13, 13]))
+
+    def test_ssdlite_mmdetection(self):
+        b, s, l = self._run_inference(detmodels.SSD_Mobile2_320_MM)
+        self.assertEqual((b[0].shape, s[0].shape), ((200, 4), (200,)))
+        self.assertEqual((b[1].shape, l[1].shape), ((200, 4), (200,)))
+        np.testing.assert_almost_equal(b[0][44], np.array([455.63, 350.44, 537.32, 426.00]), decimal=2)
+        np.testing.assert_almost_equal(b[0][155], np.array([341.20, 195.73, 352.07, 212.85]), decimal=2)
+        np.testing.assert_almost_equal(b[1][6], np.array([204.46, 126.71, 369.76, 344.50]), decimal=2)
+        np.testing.assert_almost_equal(b[1][25], np.array([93.65, 327.72, 231.41, 508.98]), decimal=2)
+        np.testing.assert_almost_equal(s[0][35:40], np.array([0.0828, 0.0811, 0.0811, 0.0770, 0.0760]), decimal=4)
+        np.testing.assert_almost_equal(s[1][1:6], np.array([0.8175, 0.3833, 0.2570, 0.2292, 0.2250]), decimal=4)
+        np.testing.assert_equal(l[0][5:20], np.array([0, 60, 62, 60, 62, 72, 56, 56, 60, 56, 72, 60, 62, 72, 58]))
+        np.testing.assert_equal(l[1][105:120], np.array([0, 0, 0, 60, 24, 26, 56, 56, 39, 73, 73, 13, 56, 13, 0]))
 
     
 if __name__ == '__main__':

@@ -42,10 +42,11 @@ class Detector():
             self.model = YOLOv3(bbone, csize, n, '_'.join(parts), dv)
         elif architecture == 'SSD':
             parts = modelnum.name.lower().split('_')[1:]
-            canvas_size = int(parts[0])
-            source = parts[1]
-            num_classes = 90 if source == 'torchvision' else 80
-            self.model = SSD(canvas_size, num_classes, source, dv)
+            bbone = parts[0]
+            csize = int(parts[1])
+            source = parts[2]
+            num_classes = 90 if source == 'tv' else 80
+            self.model = SSD(bbone, csize, num_classes, '_'.join(parts), dv)
         
         self.model.eval()
 
@@ -73,6 +74,8 @@ class detmodels(Enum):
     YOLOv3_COCO_Darknet = auto()
     YOLOv3_COCO_Mobile2_416 = auto()
     YOLOv3_COCO_Mobile2_320 = auto()
-    SSD_300_TorchVision = auto()
-    SSD_300_MMDetection = auto()
-    SSD_512_MMDetection = auto()
+    SSD_VGG16_300_TV = auto()
+    SSD_VGG16_300_MM = auto()
+    SSD_VGG16_512_MM = auto()
+    SSD_Mobile2_320_MM = auto()
+    SSD_Mobile3_320_TV = auto()
