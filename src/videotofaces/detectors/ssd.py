@@ -113,13 +113,13 @@ class SSD(nn.Module):
             cfg.update(wextra=None, wsub=None)
             cfg.update(resize='torch', norm=(122.99925, 116.9991, 103.9992)) #~(0.48235, 0.45882, 0.40784)
             cfg.update(bckg_class_first=False)
-            cfg.update(anchors_clamp=True)
+            cfg.update(anchors_rounding=False, anchors_clamp=True)
             cfg.update(lvtop=None, cltop=400, score_thr=0.01)
         elif source == 'mmdetection':
             cfg.update(wextra=self.mm_conversion, wsub='state_dict')
             cfg.update(resize='cv2', norm='imagenet')
             cfg.update(bckg_class_first=True)
-            cfg.update(anchors_clamp=False)
+            cfg.update(anchors_rounding=True, anchors_clamp=False)
             cfg.update(lvtop=1000, cltop=None, score_thr=0.02)
         return cfg
 
@@ -128,9 +128,8 @@ class SSD(nn.Module):
         self.cfg = self.get_config(pretrained)
         self.canvas_size = canvas_size
         self.backbone = BackboneExtended(hires=canvas_size == 512)
-        self.bases = self.get_bases(canvas_size, self.cfg['anchors_clamp'])
-        an_per_lvl = [len(a) for s, a in self.bases]
-        level_dims = list(zip(self.backbone.couts, an_per_lvl))
+        self.bases, num_anchors_per_level = self.get_bases(canvas_size, self.cfg)
+        level_dims = list(zip(self.backbone.couts, num_anchors_per_level))
         self.cls_heads = nn.ModuleList([Head(c, an, num_classes + 1) for c, an in level_dims])
         self.reg_heads = nn.ModuleList([Head(c, an, 4) for c, an in level_dims])
         if pretrained:
@@ -160,8 +159,7 @@ class SSD(nn.Module):
         b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
         return b, s, c
 
-
-    def get_bases(self, img_size, clamp):
+    def get_bases(self, img_size, cfg):
         if img_size == 300:
             strides = [8, 16, 32, 64, 100, 300]
             scales = [0.07, 0.15, 0.33, 0.51, 0.69, 0.87, 1.05] # = [0.07] + np.linspace(0.15, 1.05, 6)
@@ -171,26 +169,37 @@ class SSD(nn.Module):
             scales = [0.04, 0.10, 0.26, 0.42, 0.58, 0.74, 0.9, 1.06] # [0.04] + np.linspace(0.10, 1.06, 7)
             ar3_idx = [1, 2, 3, 4]
         else:
+            #img_size = 320
+            #strides=[16, 32, 64, 107, 160, 320],
+            #ratios=[[2, 3], [2, 3], [2, 3], [2, 3], [2, 3], [2, 3]],
+            #min_sizes=[48, 100, 150, 202, 253, 304],
+            #max_sizes=[100, 150, 202, 253, 304, 320]
+            # 0.15, 0.3125, 0.46875, 0.63125, 0.790625, 0.95, 1
+            # 0.1625, 0.15625, 0.1625, 0.159375, 0.159375
+            #[0.15, 0.3125, 0.47, 0.63, 0.79, 0.95] == np.linspace(0.15, 0.95, 6), 0.31 -> 0.3125
+            #[0.15, 0.3125, 0.47, 0.63, 0.79, 0.95, 1.11] == np.linspace(0.15, 1.11, 7), clamp=True
             raise ValueError(img_size)
         anchors = []
         for i in range(len(strides)):
             r = [1, 2, 0.5]
             if i in ar3_idx:
                 r.extend([3, 1/3])
-            
-            #bsize = scales[i] * img_size
-            #extra = math.sqrt(scales[i] * scales[i + 1]) * img_size
-
-            bsize = int(scales[i] * img_size)
-            bsizen = int(scales[i + 1] * img_size)
-            extra = math.sqrt(bsizen / bsize) * bsize
-            
+            if not cfg['anchors_rounding']:
+                bsize = scales[i] * img_size
+                extra = math.sqrt(scales[i] * scales[i + 1]) * img_size
+            else:
+                # the same thing but with some intermediate rounding to replicate how MMDet does it
+                # for SSD_300 it doesn't matter because the multiplications end up ~int anyway
+                # but for SSD_512 it does lead to minor difference
+                bsize = int(scales[i] * img_size)
+                bsizen = int(scales[i + 1] * img_size)
+                extra = math.sqrt(bsizen / bsize) * bsize
             a = post.make_anchors([bsize], ratios=r)[0]
             a.insert(1, (extra, extra))
-            if clamp:
+            if cfg['anchors_clamp']:
                 a = [(min(x, img_size), min(y, img_size)) for x, y in a]
-            anchors.append(a)
-        return list(zip(strides, anchors))
+            anchors.append(a)    
+        return list(zip(strides, anchors)), [len(a) for a in anchors]
 
     def postprocess(self, reg, scr, priors, sz_used, lvlen, cfg):
         n, dim, num_classes = scr.shape
