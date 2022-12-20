@@ -117,8 +117,11 @@ class MobileNetV2(BaseMultiReturn):
 
 class MobileNetV3L(BaseMultiReturn):
 
-    def __init__(self, retidx=None, bn=1e-05):
+    def __init__(self, retidx=None, bn=1e-05, reduce_tail=True):
         super().__init__(retidx)
+        out = 160
+        if reduce_tail:
+            out = out // 2
         self.layers = nn.Sequential(
             ConvUnit(3, 16, 3, 2, 1, 'hardswish', bn),
             InvertedResidual( 16, 3,  16,  16, False, 'RE', bn, 1),
@@ -133,8 +136,8 @@ class MobileNetV3L(BaseMultiReturn):
             InvertedResidual( 80, 3, 184,  80, False, 'HS', bn, 1),
             InvertedResidual( 80, 3, 480, 112, True,  'HS', bn, 1),
             InvertedResidual(112, 3, 672, 112, True,  'HS', bn, 1),
-            InvertedResidual(112, 5, 672, 160, True,  'HS', bn, 2), # C4
-            InvertedResidual(160, 5, 960, 160, True,  'HS', bn, 1),
-            InvertedResidual(160, 5, 960, 160, True,  'HS', bn, 1),
-            ConvUnit(160, 6*160, 1, 1, 0, 'hardswish', bn)
+            InvertedResidual(112, 5, 672, out, True,  'HS', bn, 2), # C4
+            InvertedResidual(out, 5,6*out,out, True,  'HS', bn, 1),
+            InvertedResidual(out, 5,6*out,out, True,  'HS', bn, 1),
+            ConvUnit(out, 6*out, 1, 1, 0, 'hardswish', bn)
         )

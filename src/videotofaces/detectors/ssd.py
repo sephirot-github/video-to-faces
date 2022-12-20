@@ -7,7 +7,7 @@ import torchvision.ops
 
 from .operations import prep, post
 from ..backbones.basic import ConvUnit, BaseMultiReturn
-from ..backbones.mobilenet import MobileNetV2
+from ..backbones.mobilenet import MobileNetV2, MobileNetV3L
 from ..utils.weights import load_weights
 
 # SSD paper: https://arxiv.org/pdf/1512.02325.pdf
@@ -81,11 +81,19 @@ class ExtendedVGG16(nn.Module):
 
 class ExtendedMobileNet(nn.Module):
 
-    def __init__(self):
+    def __init__(self, version):
         super().__init__()
-        self.backbone = MobileNetV2([5, 8], 'relu6', 1e-03)
+        if version == 'mobile2':
+            self.backbone = MobileNetV2([5, 8], 'relu6', 1e-03)
+            bbone_couts = [96, 1280]
+        else:
+            self.backbone = MobileNetV3L([13, 17], bn=1e-03, reduce_tail=True)
+            lr = self.backbone.layers[13]
+            self.backbone.layers.insert(14, lr.block[1:])
+            self.backbone.layers[13] = lr.block[0]
+            bbone_couts = [672, 480]
         self.extra = nn.ModuleList()
-        settings = [(1280, 512), (512, 256), (256, 256), (256, 128)]
+        settings = [(bbone_couts[-1], 512), (512, 256), (256, 256), (256, 128)]
         for cin, cout in settings:
             cmid = cout // 2
             self.extra.append(nn.Sequential(
@@ -95,7 +103,7 @@ class ExtendedMobileNet(nn.Module):
                     mbnet_convunit(cmid, cout, 1, 1, 0)
                 )
             ))
-        self.couts = [96, 1280] + [s[1] for s in settings]
+        self.couts = bbone_couts + [s[1] for s in settings]
 
     def forward(self, x):
         xs = self.backbone(x)
@@ -111,15 +119,13 @@ class SSDHead(nn.Module):
     def __init__(self, bbone, c, num_anchors, task_len):
         super().__init__()
         self.task_len = task_len
-        k = 3
         if bbone != 'vgg16':
-            self.prep = mbnet_convunit(c, c, 3, 1, 1, grp=c)
-            k = 1
-        self.conv = nn.Conv2d(c, num_anchors * task_len, k, 1, (k-1)//2)
+            self.conv = nn.Sequential(mbnet_convunit(c, c, 3, 1, 1, grp=c),
+                                      nn.Conv2d(c, num_anchors * task_len, 1, 1, 0))
+        else:
+            self.conv = nn.Conv2d(c, num_anchors * task_len, 3, 1, 1)
     
     def forward(self, x):
-        if hasattr(self, 'prep'):
-            x = self.prep(x)
         x = self.conv(x).permute(0, 2, 3, 1)
         x = x.reshape(x.shape[0], -1, self.task_len)
         return x
@@ -145,18 +151,22 @@ class SSD(nn.Module):
 
     def get_config(self, bbone, csize, source):
         cfg = {}
+        cfg.update(wextra=None, wsub=None)
+        cfg.update(resize='torch', means='imagenet', stdvs=None)
+        cfg.update(bckg_class_first=False)
+        cfg.update(lvtop=None, cltop=None, imtop=200, score_thr=0.01, nms_thr=0.45)
         if source == 'tv':
-            cfg.update(wextra=None, wsub=None)
-            cfg.update(resize='torch', stdvs=None, means=(122.99925, 116.9991, 103.9992)) #~(0.48235, 0.45882, 0.40784)
-            cfg.update(bckg_class_first=False)
-            cfg.update(anchors_rounding=False, anchors_clamp=True)
-            cfg.update(lvtop=None, cltop=400, score_thr=0.01)
-        elif source == 'mm':
-            cfg.update(wextra=None, wsub='state_dict')
-            cfg.update(resize='cv2', stdvs=None, means='imagenet')
             cfg.update(bckg_class_first=True)
+            cfg.update(anchors_rounding=False, anchors_clamp=True)
+            if bbone == 'vgg16':
+                cfg.update(cltop=400, means=(122.99925, 116.9991, 103.9992)) #~(0.48235, 0.45882, 0.40784)
+            else:
+                cfg.update(means=127.5, stdvs=127.5)
+                cfg.update(cltop=300, imtop=300, score_thr=0.001, nms_thr=0.55)
+        elif source == 'mm':
+            cfg.update(wsub='state_dict', resize='cv2')
             cfg.update(anchors_rounding=True, anchors_clamp=False)
-            cfg.update(lvtop=1000, cltop=None, score_thr=0.02)
+            cfg.update(lvtop=1000, score_thr=0.02)
             if bbone == 'vgg16':
                 cfg.update(wextra=self.mm_vgg_conversion)
             else:
@@ -170,8 +180,8 @@ class SSD(nn.Module):
         if backbone == 'vgg16':
             self.backbone = ExtendedVGG16(canvas_size == 512)
         else:
-            self.backbone = ExtendedMobileNet()
-        self.bases, num_anchors_per_level = self.get_bases(canvas_size, self.cfg)
+            self.backbone = ExtendedMobileNet(backbone)
+        self.bases, num_anchors_per_level = self.get_bases(canvas_size, backbone, self.cfg)
         level_dims = list(zip(self.backbone.couts, num_anchors_per_level))
         self.cls_heads = nn.ModuleList([SSDHead(backbone, c, an, num_classes + 1) for c, an in level_dims])
         self.reg_heads = nn.ModuleList([SSDHead(backbone, c, an, 4) for c, an in level_dims])
@@ -193,15 +203,15 @@ class SSD(nn.Module):
         cls = torch.cat(cls, dim=1)
         reg = torch.cat([self.reg_heads[i](xs[i]) for i in range(len(xs))], dim=1)
         scr = F.softmax(cls, dim=-1)
-        scr = scr[:, :, :-1] if bckg_first else scr[:, :, 1:]
-        #return reg, cls
+        scr = scr[:, :, :-1] if not bckg_first else scr[:, :, 1:]
         priors = post.get_priors(x.shape[2:], self.bases)
+        #return reg, cls, priors
         b, s, c = self.postprocess(reg, scr, priors, sz_used, lvlen, self.cfg)
         b = post.scale_back(b, sz_orig, sz_used)
         b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
         return b, s, c
 
-    def get_bases(self, img_size, cfg):
+    def get_bases(self, img_size, backbone, cfg):
         if img_size == 300:
             strides = [8, 16, 32, 64, 100, 300]
             scales = [0.07, 0.15, 0.33, 0.51, 0.69, 0.87, 1.05] # = [0.07] + np.linspace(0.15, 1.05, 6)
@@ -211,8 +221,14 @@ class SSD(nn.Module):
             scales = [0.04, 0.10, 0.26, 0.42, 0.58, 0.74, 0.9, 1.06] # [0.04] + np.linspace(0.10, 1.06, 7)
             ar3_idx = [1, 2, 3, 4]
         elif img_size == 320:
-            strides = [16, 32, 64, 107, 160, 320]
-            scales = [0.15, 0.313, 0.47, 0.632, 0.792, 0.95, 1]
+            if backbone == 'mobile3':
+                strides = [16, 32, 64, 106.6667, 160, 320]
+                scales = [0.2, 0.35, 0.5, 0.65, 0.8, 0.95, 1]
+                # rmin, rmax, n = 0.2, 0.95, 6
+                # [rmin + (rmax - rmin) * k / (n - 1) for k in range(n)]
+            elif backbone == 'mobile2':
+                strides = [16, 32, 64, 107, 160, 320]
+                scales = [0.15, 0.313, 0.47, 0.632, 0.792, 0.95, 1]
             ar3_idx = [0, 1, 2, 3, 4, 5]
             #min_sizes=[48, 100, 150, 202, 253, 304],
             #max_sizes=[100, 150, 202, 253, 304, 320]
@@ -237,6 +253,8 @@ class SSD(nn.Module):
                 bsize = int(scales[i] * img_size)
                 bsizen = int(scales[i + 1] * img_size)
                 extra = math.sqrt(bsizen / bsize) * bsize
+            print(bsize)
+            if i == len(strides) - 1: print(bsizen if cfg['anchors_rounding'] else scales[i + 1] * img_size)
             a = post.make_anchors([bsize], ratios=r)[0]
             a.insert(1, (extra, extra))
             if cfg['anchors_clamp']:
@@ -250,7 +268,7 @@ class SSD(nn.Module):
         fidx = torch.nonzero(scr > cfg['score_thr']).squeeze()
         fidx = post.top_per_level(fidx, scr, cfg['lvtop'], lvlen, n, mult=num_classes)
         scores = scr[fidx]
-        classes = fidx % num_classes + (0 if self.cfg['bckg_class_first'] else 1)
+        classes = fidx % num_classes + (0 if not self.cfg['bckg_class_first'] else 1)
         idx = torch.div(fidx, num_classes, rounding_mode='floor')
         imidx = idx.div(dim, rounding_mode='floor')
 
@@ -264,6 +282,6 @@ class SSD(nn.Module):
         res = []
         for i in range(n):
             bi, si, ci = [x[imidx == i] for x in [boxes, scores, classes]]
-            keep = torchvision.ops.batched_nms(bi, si, ci, 0.45)[:200]
+            keep = torchvision.ops.batched_nms(bi, si, ci, cfg['nms_thr'])[:cfg['imtop']]
             res.append((bi[keep], si[keep], ci[keep]))
         return map(list, zip(*res))

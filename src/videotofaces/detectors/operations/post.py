@@ -84,8 +84,8 @@ def top_per_class(scores, classes, imidx, limit):
     for c in classes.unique():
         for i in range(torch.max(imidx) + 1):
             cidx = torch.nonzero((classes == c) * (imidx == i)).squeeze(-1)
-            if cidx.numel() > 400:
-                _, top = torch.topk(scores[cidx], 400)
+            if cidx.numel() > limit:
+                _, top = torch.topk(scores[cidx], limit)
                 sel.append(cidx[top])
             elif cidx.numel() > 0:
                 sel.append(cidx)
@@ -152,11 +152,11 @@ def get_priors(img_size, bases, dv='cpu', loc='center', patches='as_is', concat=
         ny = math.ceil(h / stride)
         step_x = stride if patches == 'as_is' else w // nx
         step_y = stride if patches == 'as_is' else h // ny
-        xs = torch.arange(nx, device=dv) * step_x
-        ys = torch.arange(ny, device=dv) * step_y
+        xs = torch.arange(nx, device=dv, dtype=torch.float32) * step_x
+        ys = torch.arange(ny, device=dv, dtype=torch.float32) * step_y
         if loc == 'center':
-            xs += step_x // 2
-            ys += step_y // 2
+            xs += step_x / 2
+            ys += step_y / 2
         c = torch.dstack(torch.meshgrid(xs, ys, indexing='xy')).reshape(-1, 2)
         # could replace line above by "torch.cartesian_prod(xs, ys)" but that'd be for indexing='ij'
         c = c.repeat_interleave(len(anchors), dim=0)
