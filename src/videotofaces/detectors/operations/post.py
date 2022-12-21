@@ -160,7 +160,7 @@ def get_priors(img_size, bases, dv='cpu', loc='center', patches='as_is', concat=
         c = torch.dstack(torch.meshgrid(xs, ys, indexing='xy')).reshape(-1, 2)
         # could replace line above by "torch.cartesian_prod(xs, ys)" but that'd be for indexing='ij'
         c = c.repeat_interleave(len(anchors), dim=0)
-        s = torch.tensor(anchors, device=dv).repeat(nx*ny, 1)
+        s = torch.tensor(anchors, device=dv, dtype=torch.float32).repeat(nx*ny, 1)
         p.append(torch.hstack([c, s]))
     if not concat:
         return p

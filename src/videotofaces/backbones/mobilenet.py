@@ -117,7 +117,7 @@ class MobileNetV2(BaseMultiReturn):
 
 class MobileNetV3L(BaseMultiReturn):
 
-    def __init__(self, retidx=None, bn=1e-05, reduce_tail=True):
+    def __init__(self, retidx=None, bn=1e-05, reduce_tail=False):
         super().__init__(retidx)
         out = 160
         if reduce_tail:

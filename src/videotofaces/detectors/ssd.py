@@ -1,5 +1,4 @@
-import math
-
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -153,24 +152,26 @@ class SSD(nn.Module):
         cfg = {}
         cfg.update(wextra=None, wsub=None)
         cfg.update(resize='torch', means='imagenet', stdvs=None)
-        cfg.update(bckg_class_first=False)
+        cfg.update(bckg_class_first=False, anchors_clamp=False)
         cfg.update(lvtop=None, cltop=None, imtop=200, score_thr=0.01, nms_thr=0.45)
         if source == 'tv':
-            cfg.update(bckg_class_first=True)
-            cfg.update(anchors_rounding=False, anchors_clamp=True)
+            cfg.update(bckg_class_first=True, anchors_clamp=True)
             if bbone == 'vgg16':
-                cfg.update(cltop=400, means=(122.99925, 116.9991, 103.9992)) #~(0.48235, 0.45882, 0.40784)
-            else:
+                cfg.update(means=(122.99925, 116.9991, 103.9992), stdvs=None) #~(0.48235, 0.45882, 0.40784)
+                cfg.update(cltop=400)
+            elif bbone == 'mobile3':
                 cfg.update(means=127.5, stdvs=127.5)
                 cfg.update(cltop=300, imtop=300, score_thr=0.001, nms_thr=0.55)
+                cfg['anchors_scales'] = np.append(np.linspace(0.2, 0.95, 6), 1) # Eq.4 SSD paper
         elif source == 'mm':
             cfg.update(wsub='state_dict', resize='cv2')
-            cfg.update(anchors_rounding=True, anchors_clamp=False)
             cfg.update(lvtop=1000, score_thr=0.02)
             if bbone == 'vgg16':
                 cfg.update(wextra=self.mm_vgg_conversion)
-            else:
-                cfg.update(stdvs='imagenet')
+            elif bbone == 'mobile2':
+                cfg.update(means='imagenet', stdvs='imagenet')
+                cfg['anchors_scales'] = np.append(np.linspace(0.15, 0.95, 6), 1)
+                cfg['anchors_scales'][1] += 0.0025 # manual adjustment to match MMDet boxes
         return cfg
 
     def __init__(self, backbone, canvas_size, num_classes, pretrained=None, device='cpu'):
@@ -181,7 +182,7 @@ class SSD(nn.Module):
             self.backbone = ExtendedVGG16(canvas_size == 512)
         else:
             self.backbone = ExtendedMobileNet(backbone)
-        self.bases, num_anchors_per_level = self.get_bases(canvas_size, backbone, self.cfg)
+        self.bases, num_anchors_per_level = self.get_bases(canvas_size, self.cfg)
         level_dims = list(zip(self.backbone.couts, num_anchors_per_level))
         self.cls_heads = nn.ModuleList([SSDHead(backbone, c, an, num_classes + 1) for c, an in level_dims])
         self.reg_heads = nn.ModuleList([SSDHead(backbone, c, an, 4) for c, an in level_dims])
@@ -199,9 +200,10 @@ class SSD(nn.Module):
         xs = self.backbone(x)
         #return xs
         cls = [self.cls_heads[i](xs[i]) for i in range(len(xs))]
+        reg = [self.reg_heads[i](xs[i]) for i in range(len(xs))]
         lvlen = [lvl.shape[1] for lvl in cls]
         cls = torch.cat(cls, dim=1)
-        reg = torch.cat([self.reg_heads[i](xs[i]) for i in range(len(xs))], dim=1)
+        reg = torch.cat(reg, dim=1)
         scr = F.softmax(cls, dim=-1)
         scr = scr[:, :, :-1] if not bckg_first else scr[:, :, 1:]
         priors = post.get_priors(x.shape[2:], self.bases)
@@ -211,55 +213,36 @@ class SSD(nn.Module):
         b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
         return b, s, c
 
-    def get_bases(self, img_size, backbone, cfg):
-        if img_size == 300:
-            strides = [8, 16, 32, 64, 100, 300]
-            scales = [0.07, 0.15, 0.33, 0.51, 0.69, 0.87, 1.05] # = [0.07] + np.linspace(0.15, 1.05, 6)
-            ar3_idx = [1, 2, 3]
-        elif img_size == 512:
-            strides = [8, 16, 32, 64, 128, 256, 512]
-            scales = [0.04, 0.10, 0.26, 0.42, 0.58, 0.74, 0.9, 1.06] # [0.04] + np.linspace(0.10, 1.06, 7)
-            ar3_idx = [1, 2, 3, 4]
-        elif img_size == 320:
-            if backbone == 'mobile3':
-                strides = [16, 32, 64, 106.6667, 160, 320]
-                scales = [0.2, 0.35, 0.5, 0.65, 0.8, 0.95, 1]
-                # rmin, rmax, n = 0.2, 0.95, 6
-                # [rmin + (rmax - rmin) * k / (n - 1) for k in range(n)]
-            elif backbone == 'mobile2':
-                strides = [16, 32, 64, 107, 160, 320]
-                scales = [0.15, 0.313, 0.47, 0.632, 0.792, 0.95, 1]
-            ar3_idx = [0, 1, 2, 3, 4, 5]
-            #min_sizes=[48, 100, 150, 202, 253, 304],
-            #max_sizes=[100, 150, 202, 253, 304, 320]
-            # 0.15, 0.3125, 0.46875, 0.63125, 0.790625, 0.95, 1
-            # 0.1625, 0.15625, 0.1625, 0.159375, 0.159375
-            #[0.15, 0.3125, 0.47, 0.63, 0.79, 0.95] == np.linspace(0.15, 0.95, 6), 0.31 -> 0.3125
-            #[0.15, 0.3125, 0.47, 0.63, 0.79, 0.95, 1.11] == np.linspace(0.15, 1.11, 7), clamp=True
-        else:
-            raise ValueError(img_size)
+    strides_and_ar3flags = {
+        '300': ([8, 16, 32, 64, 100, 300], [False, True, True, True, False, False]),
+        '512': ([8, 16, 32, 64, 128, 256, 512], [False, True, True, True, True, False, False]),
+        '320': ([16, 32, 64, 106.67, 160, 320], [True] * 6)
+    }
+    
+    def get_scales(self, canvas_size):
+        # formula from official implementation (which is like eq.4 from SSD paper but not exactly):
+        # https://github.com/weiliu89/caffe/blob/ssd/examples/ssd/ssd_coco.py#L315
+        # + section 3.4 of SSD paper (smallest boxes for COCO)
+        smallest, rmin, rmax, n = (0.07, 0.15, 0.87, 6) if canvas_size == 300 else (0.04, 0.1, 0.9, 7)
+        step = (rmax - rmin) / (n - 2)
+        scales = [smallest] + [rmin + i * step for i in range(n)]
+        return np.array(scales)
+
+    def get_bases(self, canvas_size, cfg):
+        # custom SDD anchors as described on page 6 of the paper
+        assert canvas_size in [300, 512, 320]
+        strides, ar3flags = self.strides_and_ar3flags[str(canvas_size)]
+        scales = cfg['anchors_scales'] if ('anchors_scales' in cfg) else self.get_scales(canvas_size)
+        sz = (scales * canvas_size).round().astype(int)
         anchors = []
         for i in range(len(strides)):
-            r = [1, 2, 0.5]
-            if i in ar3_idx:
-                r.extend([3, 1/3])
-            if not cfg['anchors_rounding']:
-                bsize = scales[i] * img_size
-                extra = math.sqrt(scales[i] * scales[i + 1]) * img_size
-            else:
-                # the same thing but with some intermediate rounding to replicate how MMDet does it
-                # for SSD_300 it doesn't matter because the multiplications end up ~int anyway
-                # but for SSD_512 it does lead to minor difference
-                bsize = int(scales[i] * img_size)
-                bsizen = int(scales[i + 1] * img_size)
-                extra = math.sqrt(bsizen / bsize) * bsize
-            print(bsize)
-            if i == len(strides) - 1: print(bsizen if cfg['anchors_rounding'] else scales[i + 1] * img_size)
-            a = post.make_anchors([bsize], ratios=r)[0]
+            r = [1, 2, 0.5] + ([3, 1/3] if ar3flags[i] else [])
+            a = post.make_anchors([sz[i]], ratios=r)[0]
+            extra = np.sqrt(sz[i + 1] / sz[i]) * sz[i]
             a.insert(1, (extra, extra))
             if cfg['anchors_clamp']:
-                a = [(min(x, img_size), min(y, img_size)) for x, y in a]
-            anchors.append(a)    
+                a = [(min(x, canvas_size), min(y, canvas_size)) for x, y in a]
+            anchors.append(a)
         return list(zip(strides, anchors)), [len(a) for a in anchors]
 
     def postprocess(self, reg, scr, priors, sz_used, lvlen, cfg):

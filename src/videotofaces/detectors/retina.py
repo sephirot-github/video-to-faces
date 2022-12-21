@@ -91,7 +91,7 @@ class RetinaFace_Biubug6(nn.Module):
 
     def forward(self, imgs):
         dv = next(self.parameters()).device
-        ts = prep.to_tensors(imgs, dv, norm=([104, 117, 123], None), to0_1=False, toRGB=False)
+        ts = prep.to_tensors(imgs, dv, means=[104, 117, 123], stdvs=None, to_rgb=False)
         x = torch.stack(ts)
 
         xs = self.body(x)
@@ -130,7 +130,7 @@ class RetinaFace_BBT(nn.Module):
     
     def forward(self, imgs):
         dv = next(self.parameters()).device
-        ts = prep.to_tensors(imgs, dv, norm='imagenet')
+        ts = prep.to_tensors(imgs, dv, means='imagenet', stdvs='imagenet')
         x = torch.stack(ts)
         
         xs = self.body(x)
@@ -192,7 +192,7 @@ class RetinaNet_TorchVision(nn.Module):
     
     def forward(self, imgs):
         dv = next(self.parameters()).device
-        x, sz_orig, sz_used = prep.full(imgs, dv, (800, 1333), 'torch', norm='imagenet')
+        x, sz_orig, sz_used = prep.full(imgs, dv, (800, 1333), 'torch')
         
         xs = self.body(x)
         xs = self.fpn(xs)

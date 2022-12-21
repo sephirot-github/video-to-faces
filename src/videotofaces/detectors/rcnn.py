@@ -219,7 +219,7 @@ class FasterRCNN(nn.Module):
         priors_patches = self.cfg['priors_patches']
         strides = self.cfg['strides']
         
-        x, sz_orig, sz_used = prep.full(imgs, dv, resize, resize_with, norm='imagenet')
+        x, sz_orig, sz_used = prep.full(imgs, dv, resize, resize_with)
         priors = post.get_priors(x.shape[2:], self.bases, dv, 'corner', priors_patches, concat=False)
         xs = self.body(x)
         xs = self.fpn(xs)

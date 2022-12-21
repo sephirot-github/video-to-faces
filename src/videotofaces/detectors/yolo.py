@@ -159,11 +159,11 @@ class YOLOv3(nn.Module):
         if backbone == 'darknet':
             self.backbone = Darknet53()
             cbone, cneck, chead = [256, 512, 1024], [128, 256, 512], [256, 512, 1024]
-            self.norm = None
+            self.norm = {'means': None, 'stdvs': 255}
         elif backbone == 'mobile2':
             self.backbone = MobileNetV2([3, 5, 7])
             cbone, cneck, chead = [32, 96, 320], [96] * 3, [96] * 3
-            self.norm = 'imagenet'
+            self.norm = {'means': 'imagenet', 'stdvs': 'imagenet'}
         self.neck = YOLOv3Neck(cbone, cneck)
         self.head = YOLOv3Head(cneck, chead, num_classes)
         if pretrained:
@@ -174,7 +174,7 @@ class YOLOv3(nn.Module):
   
     def forward(self, imgs):
         dv = next(self.parameters()).device
-        x, szo, sz = prep.full(imgs, dv, self.canvas_size, 'cv2', norm=self.norm)
+        x, szo, sz = prep.full(imgs, dv, self.canvas_size, 'cv2', **self.norm)
         xs = self.backbone(x)
         xs = self.neck(xs)
         xs = self.head(xs)
