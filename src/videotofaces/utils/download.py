@@ -2,6 +2,7 @@ import os
 import os.path as osp
 import re
 import requests
+import shutil
 
 from .pbar import tqdm
 
@@ -11,7 +12,7 @@ def url_download(url, dst, gdrive=False):
     # and https://github.com/wkentaro/gdown/blob/main/gdown/download.py
     CHUNK_SIZE = 1024 * 1024 # 1MB
     session = requests.session()
-    headers = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36' } # NOQA
+    headers = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36' }
     params = { 'confirm': 1 }
     response = session.get(url, headers=headers, params=params, stream=True, verify=True)
   
@@ -36,6 +37,25 @@ def url_download(url, dst, gdrive=False):
                     pbar.update(len(chunk))
     finally:
         session.close()
+
+
+def cwd_download_unpack(link, arcn=None, warn=None, print_unpack=False):
+    if arcn is None:
+        arcn = osp.basename(link)
+    if warn:
+        print('WARNING: the download size is %s GB. Continue? Y/N' % str(warn))
+        inp = ''
+        while inp not in ['Y', 'N', 'y', 'n']:
+            inp = str(input())
+        if inp in ['N', 'n']:
+            return False
+    url_download(link, arcn, gdrive=link.startswith('https://drive.google.com/'))
+    if print_unpack:
+        # https://stackoverflow.com/questions/4341584/extract-zipfile-using-python-display-progress-percentage
+        print('Unpacking archive...')
+    shutil.unpack_archive(arcn)
+    os.remove(arcn)
+    return True
 
 
 def prep_weights_file(url, fn, gdrive=False):
