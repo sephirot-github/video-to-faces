@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.ops
 
-from .operations import prep, post
+from .operations import prep, post, coco
 from ..backbones.basic import ConvUnit, BaseMultiReturn
 from ..backbones.mobilenet import MobileNetV2, MobileNetV3L
 from ..utils.weights import load_weights
@@ -148,6 +148,15 @@ class SSD(nn.Module):
         ret.update(wd)
         return ret
 
+    def tv_conversion(self, wd):
+        bbone = 'vgg' if 'backbone.scale_weight' in wd else 'mobile'
+        extra = '.' if bbone == 'vgg' else '.1.'
+        for i in range(6):
+            nm = 'head.classification_head.module_list.' + str(i) + extra
+            for s in ['weight', 'bias']:
+                wd[nm+s] = coco.weights_91_to_80(wd[nm+s])
+        return wd
+
     def get_config(self, bbone, csize, source):
         cfg = {}
         cfg.update(wextra=None, wsub=None)
@@ -155,7 +164,10 @@ class SSD(nn.Module):
         cfg.update(bckg_class_first=False, anchors_clamp=False)
         cfg.update(lvtop=None, cltop=None, imtop=200, score_thr=0.01, nms_thr=0.45)
         if source == 'tv':
-            cfg.update(bckg_class_first=True, anchors_clamp=True)
+            cfg.update(bckg_class_first=True)
+            #cfg.update(wextra=self.tv_conversion)
+
+            cfg.update(anchors_clamp=True)
             if bbone == 'vgg16':
                 cfg.update(means=(122.99925, 116.9991, 103.9992), stdvs=None) #~(0.48235, 0.45882, 0.40784)
                 cfg.update(cltop=400)
