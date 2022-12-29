@@ -7,7 +7,7 @@ import shutil
 from .pbar import tqdm
 
 
-def url_download(url, dst, gdrive=False):
+def url_download(url, dst=None, gdrive=False):
     # adapted from https://stackoverflow.com/questions/38511444/python-download-files-from-google-drive-using-url
     # and https://github.com/wkentaro/gdown/blob/main/gdown/download.py
     CHUNK_SIZE = 1024 * 1024 # 1MB
@@ -15,7 +15,7 @@ def url_download(url, dst, gdrive=False):
     headers = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36' }
     params = { 'confirm': 1 }
     response = session.get(url, headers=headers, params=params, stream=True, verify=True)
-  
+    
     # for Google Drive in case it returns a "file too big for virus scan, confirm to download anyway" page
     # (adding 'confirm 1' to params like above seems to be enough but let's keep this too for failproofing)
     if gdrive and 'Content-Disposition' not in response.headers:
@@ -30,6 +30,7 @@ def url_download(url, dst, gdrive=False):
     try:
         total = response.headers.get('Content-Length')
         total = int(total) if total else None
+        dst = dst if dst else osp.basename(url)
         with open(dst, 'wb') as f:
             with tqdm(total=total, unit='B', unit_scale=True, unit_divisor=1024) as pbar:
                 for chunk in response.iter_content(CHUNK_SIZE):
@@ -39,24 +40,10 @@ def url_download(url, dst, gdrive=False):
         session.close()
 
 
-def cwd_download_unpack(link, arcn=None, warn=None, print_unpack=False):
-    if arcn is None:
-        arcn = osp.basename(link)
-    if warn:
-        print('WARNING: the download size is %s GB. Continue? Y/N' % str(warn))
-        inp = ''
-        while inp not in ['Y', 'N', 'y', 'n']:
-            inp = str(input())
-        if inp in ['N', 'n']:
-            return False
-    url_download(link, arcn, gdrive=link.startswith('https://drive.google.com/'))
-    if print_unpack:
-        # https://stackoverflow.com/questions/4341584/extract-zipfile-using-python-display-progress-percentage
-        print('Unpacking archive...')
-    shutil.unpack_archive(arcn)
-    os.remove(arcn)
-    return True
-
+def gdrive_download(gid, dst):
+    link = 'https://drive.google.com/uc?id=' + gid
+    url_download(link, dst)
+    
 
 def prep_weights_file(url, fn, gdrive=False):
     home = osp.dirname(osp.dirname(osp.realpath(__file__))) if '__file__' in globals() else os.getcwd()

@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.ops
 
-from .operations import prep, post, coco
+from .operations import prep, post
 from ..backbones.basic import ConvUnit, BaseMultiReturn
 from ..backbones.mobilenet import MobileNetV2, MobileNetV3L
 from ..utils.weights import load_weights
@@ -153,8 +153,8 @@ class SSD(nn.Module):
         extra = '.' if bbone == 'vgg' else '.1.'
         for i in range(6):
             nm = 'head.classification_head.module_list.' + str(i) + extra
-            for s in ['weight', 'bias']:
-                wd[nm+s] = coco.weights_91_to_80(wd[nm+s])
+            #for s in ['weight', 'bias']:
+            #    wd[nm+s] = coco.weights_91_to_80(wd[nm+s])
         return wd
 
     def get_config(self, bbone, csize, source):
