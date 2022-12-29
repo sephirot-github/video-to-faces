@@ -12,4 +12,6 @@ def get_coco_data(gtdir):
     fn, gt, cl = map(list, zip(*ann))
     gt = [np.array(e) for e in gt]
     cl = [np.array(e) for e in cl]
+    for a in gt:
+        a[:, 2:] += a[:, :2]
     return fn, gt, cl
