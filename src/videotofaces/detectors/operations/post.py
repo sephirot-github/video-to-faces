@@ -174,6 +174,13 @@ def convert_to_cwh(boxes):
     return boxes
 
 
+def convert_to_xyxy(boxes):
+    """from (cx, cy, w, h) to (x1, y1, x2, y2)"""
+    boxes[..., :2] -= boxes[..., 2:] * 0.5
+    boxes[..., 2:] += boxes[..., :2]
+    return boxes
+
+
 def decode_boxes(pred, priors, mults=(1, 1), clamp=False, mode='rcnn', strides=None):
     """Converts predicted boxes from network outputs into actual image coordinates based on some
     fixed starting ``priors`` using Eq.1-4 from here: https://arxiv.org/pdf/1311.2524.pdf

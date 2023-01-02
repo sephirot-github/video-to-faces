@@ -21,20 +21,3 @@ def calc_iou_matrix(a, b, plus1=False):
     inter = wh[:, :, 0] * wh[:, :, 1]
     union = area1[:, None] + area2 - inter
     return inter / union
-
-
-def assign_gt_to_priors(gtboxes, priors, low_thr, high_thr, match_low_quality):
-    """
-    """
-    m = calc_iou_matrix(gtboxes, priors)
-    v, idx = m.max(dim=0)
-    idx += 1
-    if match_low_quality:
-        copied = idx.clone()
-    idx[v < low_thr] = 0
-    idx[(v >= low_thr) & (v < high_thr)] = -1
-    if match_low_quality:
-        maxgt = m.max(dim=1)[0]
-        extra = torch.where(m == maxgt[:, None])[1]
-        idx[extra] = copied[extra]
-    return idx

@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.ops
 
-from .operations import prep, post
+from .operations import prep, post, bbox, loss
 from .components.fpn import FeaturePyramidNetwork
 from ..backbones.basic import ConvUnit
 from ..backbones.resnet import ResNet50
@@ -19,20 +19,29 @@ class RegionProposalNetwork(nn.Module):
         self.log = nn.Conv2d(c, num_anchors, 1, 1)
         self.reg = nn.Conv2d(c, num_anchors * 4, 1, 1)
 
-    def head(self, x, priors, lvtop):
+    def head(self, x):
         n = x.shape[0]
         x = self.conv(x)
         reg = self.reg(x).permute(0, 2, 3, 1).reshape(n, -1, 4)
         log = self.log(x).permute(0, 2, 3, 1).reshape(n, -1, 1)
-        log, top = log.topk(min(lvtop, log.shape[1]), dim=1)
-        reg = reg.gather(1, top.expand(-1, -1, 4))
-        pri = priors.expand(n, -1, -1).gather(1, top.expand(-1, -1, 4))
-        boxes = post.decode_boxes(reg, pri, mults=(1, 1), clamp=True)
-        return boxes, log, log.shape[1]
+        return reg, log
 
-    def forward(self, fmaps, priors, imsizes, cfg):
-        tups = [self.head(x, p, cfg['lvtop']) for x, p in zip(fmaps, priors)]
-        boxes, logits, lvlen = map(list, zip(*tups))
+    def filt_dec(self, regs, logs, priors, lvtop):
+        res = []
+        n = regs[0].shape[0]
+        for reg, log, p in zip(regs, logs, priors):
+            log, top = log.topk(min(lvtop, log.shape[1]), dim=1)
+            reg = reg.gather(1, top.expand(-1, -1, 4))
+            pri = p.expand(n, -1, -1).gather(1, top.expand(-1, -1, 4))
+            boxes = post.decode_boxes(reg, pri, mults=(1, 1), clamp=True)
+            res.append((boxes, log, log.shape[1]))
+        return map(list, zip(*res))
+
+    def forward(self, fmaps, gtboxes, priors, imsizes, cfg):
+        tuples = [self.head(x) for x in fmaps]
+        regs, logs = map(list, zip(*tuples))      
+        
+        boxes, logits, lvlen = self.filt_dec(regs, logs, priors, cfg['lvtop'])
         boxes = torch.cat(boxes, axis=1)
         obj = torch.cat(logits, axis=1).sigmoid()
 
@@ -47,7 +56,20 @@ class RegionProposalNetwork(nn.Module):
         groups = imidx * 10 + post.get_lvidx(idx % dim, lvlen)
         keep = torchvision.ops.batched_nms(boxes, obj, groups, cfg['iou_thr1'])
         keep = torch.cat([keep[imidx[keep] == i][:cfg['imtop1']] for i in range(n)])
-        return boxes[keep], imidx[keep]
+        boxes, imidx = boxes[keep], imidx[keep]
+
+        if not self.training:
+            return boxes, imidx, None
+        else:
+            reg = torch.cat(regs, axis=1).reshape(-1, 4)
+            log = torch.cat(logs, axis=1).flatten()
+            priors = post.convert_to_xyxy(torch.cat(priors))
+            torch.manual_seed(0)
+            sidx_pos, sidx = loss.get_sidx(gtboxes, priors)
+            #loss_obj = F.binary_cross_entropy_with_logits(objectness[sidx], labels[sidx])
+            #enc = reg[sidx_pos]
+            #loss_reg = F.smooth_l1_loss(enc, gtboxes[sidx_pos], beta=1/9, reduction='sum') / (sidx.numel())
+            return boxes, imidx, (sidx_pos, sidx)
 
 
 class RoIProcessingNetwork(nn.Module):
@@ -212,19 +234,27 @@ class FasterRCNN(nn.Module):
         load_weights(self, self.links[pretrained], pretrained, device,
                      cfg['weights_extra'], cfg['weights_sub'], cfg['weights_add_nbatches'])
 
-    def forward(self, imgs):
+    def forward(self, imgs, targets=None):
         dv = next(self.parameters()).device
         resize = (self.cfg['resize_min'], self.cfg['resize_max'])
         resize_with = self.cfg['prep_resize']
         priors_patches = self.cfg['priors_patches']
         strides = self.cfg['strides']
-        
+        gtboxes, gtclasses = targets if targets else (None, None)
+
         x, sz_orig, sz_used = prep.full(imgs, dv, resize, resize_with)
+        if self.training:
+            scales = torch.tensor(sz_used) / torch.tensor(sz_orig)
+            scales = scales.flip(1).repeat(1, 2)
+            gtboxes = [gtboxes[i] * scales[i] for i in range(len(gtboxes))]
         priors = post.get_priors(x.shape[2:], self.bases, dv, 'corner', priors_patches, concat=False)
         xs = self.body(x)
         xs = self.fpn(xs)
-        p, imidx = self.rpn(xs, priors, sz_used, self.cfg)
+        p, imidx, p_losses = self.rpn(xs, gtboxes, priors, sz_used, self.cfg)
         b, s, c = self.roi(p, imidx, xs[:-1], strides[:-1], sz_used, self.cfg)
         b = post.scale_back(b, sz_orig, sz_used)
         b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
-        return b, s, c
+        if not self.training:
+            return b, s, c
+        else:
+            return p_losses

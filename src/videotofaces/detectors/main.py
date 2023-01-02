@@ -10,7 +10,7 @@ from .ssd import SSD
 
 class Detector():
 
-    def __init__(self, modelnum, device=None):
+    def __init__(self, modelnum, device=None, train=False):
         if device is None:
             dv = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         else:
@@ -48,11 +48,15 @@ class Detector():
             num_classes = 90 if source == 'tv' else 80
             self.model = SSD(bbone, csize, num_classes, '_'.join(parts), dv)
         
-        self.model.eval()
+        if not train:
+            self.model.eval()
 
-    def __call__(self, imgs):
-        with torch.inference_mode():
-            return self.model(imgs)
+    def __call__(self, imgs, targets=None):
+        if self.model.training:
+            return self.model(imgs, targets)
+        else:
+            with torch.inference_mode():
+                return self.model(imgs)
 
 
 class detmodels(Enum):
