@@ -117,7 +117,7 @@ class MobileNetV2(BaseMultiReturn):
 
 class MobileNetV3L(BaseMultiReturn):
 
-    def __init__(self, retidx=None, bn=1e-05, reduce_tail=False):
+    def __init__(self, retidx=None, bn=1e-05, reduce_tail=False, num_freeze=None):
         super().__init__(retidx)
         out = 160
         if reduce_tail:
@@ -141,3 +141,7 @@ class MobileNetV3L(BaseMultiReturn):
             InvertedResidual(out, 5,6*out,out, True,  'HS', bn, 1),
             ConvUnit(out, 6*out, 1, 1, 0, 'hardswish', bn)
         )
+        if num_freeze:
+            for layer in self.layers[:num_freeze]:
+                for p in layer.parameters():
+                    p.requires_grad_(False)

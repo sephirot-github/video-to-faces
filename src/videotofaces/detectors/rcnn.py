@@ -23,9 +23,7 @@ class RegionProposalNetwork(nn.Module):
         n = x.shape[0]
         x = self.conv(x)
         reg = self.reg(x).permute(0, 2, 3, 1).reshape(n, -1, 4)
-        log = self.log(x)
-        print(log.shape, log[1][5][10][:5])
-        log = log.permute(0, 2, 3, 1).reshape(n, -1, 1)
+        log = self.log(x).permute(0, 2, 3, 1).reshape(n, -1, 1)
         return reg, log
 
     def filt_dec(self, regs, logs, priors, lvtop):
@@ -42,12 +40,10 @@ class RegionProposalNetwork(nn.Module):
     def forward(self, fmaps, gtboxes, priors, imsizes, cfg):
         tuples = [self.head(x) for x in fmaps]
         regs, logs = map(list, zip(*tuples))
-
-        logs1 = torch.cat(logs, axis=1)
-        print('hello1')
-        print(logs1.shape, logs1[0][:5, 0], logs1[1][:5, 0])
         
-        boxes, logits, lvlen = self.filt_dec(regs, logs, priors, cfg['lvtop'])
+        dregs = [x.detach() for x in regs]
+        dlogs = [x.detach() for x in logs]
+        boxes, logits, lvlen = self.filt_dec(dregs, dlogs, priors, cfg['lvtop'])
         boxes = torch.cat(boxes, axis=1)
         obj = torch.cat(logits, axis=1).sigmoid()
 
@@ -69,11 +65,8 @@ class RegionProposalNetwork(nn.Module):
         else:
             regs = torch.cat(regs, axis=1)#.view(-1, 4)
             logs = torch.cat(logs, axis=1)#.view(-1)
-            print('hello2')
-            print(logs.shape, logs[0][:5, 0], logs[1][:5, 0])
-            priors = post.convert_to_xyxy(torch.cat(priors))
-            torch.manual_seed(0)
-            loss_obj, loss_reg = loss.get_losses(gtboxes, priors, regs, logs)
+            priors = torch.cat(priors)
+            loss_obj, loss_reg = loss.get_losses(gtboxes, priors, regs, logs, 0.3, 0.7, 256, 0.5)
             return boxes, imidx, (loss_obj, loss_reg)
 
 
@@ -124,18 +117,26 @@ class RoIProcessingNetwork(nn.Module):
         boxes = post.clamp_to_canvas(boxes, imsizes, imidx)
         boxes, scr, cls, imidx = post.remove_small(boxes, cfg['min_size2'], scr, cls, imidx)
         
-        res = []
-        for i in range(n):
-            bi, si, ci = [x[imidx == i] for x in [boxes, scr, cls]]
-            keep = torchvision.ops.batched_nms(bi, si, ci, cfg['iou_thr2'])[:cfg['imtop2']]
-            res.append((bi[keep], si[keep], ci[keep]))
-        return map(list, zip(*res))
         #groups = imidx * 1000 + cls
         #keep = torchvision.ops.batched_nms(boxes, scr, groups, cfg['iou_thr2'])
         #keep = torch.cat([keep[imidx[keep] == i][:cfg['imtop2']] for i in range(n)])
         #boxes, scr, cls, imidx = [x[keep] for x in [boxes, scr, cls, imidx]]
         #boxes, scr, cls = [[x[imidx == i] for i in range(n)] for x in [boxes, scr, cls]]
         #return boxes, scr, cls
+        res = []
+        for i in range(n):
+            bi, si, ci = [x[imidx == i] for x in [boxes, scr, cls]]
+            keep = torchvision.ops.batched_nms(bi, si, ci, cfg['iou_thr2'])[:cfg['imtop2']]
+            res.append((bi[keep], si[keep], ci[keep]))
+        if not self.training:
+            return map(list, zip(*res))
+        else:
+            return map(list, zip(*res))
+            #regs = torch.cat(regs, axis=1)#.view(-1, 4)
+            #logs = torch.cat(logs, axis=1)#.view(-1)
+            #priors = post.convert_to_xyxy(torch.cat(priors))
+            #loss_obj, loss_reg = loss.get_losses(gtboxes, priors, regs, logs, 0.5, 0.5, 512, 0.25)
+            #return boxes, imidx, (loss_obj, loss_reg)
         
 
 class FasterRCNN(nn.Module):
@@ -224,7 +225,7 @@ class FasterRCNN(nn.Module):
         if cfg['bbone'] == 'resnet50':
             return ResNet50(bn_eps=cfg['resnet_bn_eps'])
         if cfg['bbone'] == 'mobilenetv3l':
-            return MobileNetV3L([13, 16])
+            return MobileNetV3L([13, 16], bn=(1e-05, 'frozen'), num_freeze=7)
 
     def __init__(self, pretrained='tv_resnet50_v1', device='cpu'):
         super().__init__()
@@ -255,7 +256,6 @@ class FasterRCNN(nn.Module):
         priors = post.get_priors(x.shape[2:], self.bases, dv, 'corner', priors_patches, concat=False)
         xs = self.body(x)
         xs = self.fpn(xs)
-        print(len(xs), xs[0].shape, xs[0][1][100][4][:10])
         p, imidx, p_losses = self.rpn(xs, gtboxes, priors, sz_used, self.cfg)
         b, s, c = self.roi(p, imidx, xs[:-1], strides[:-1], sz_used, self.cfg)
         b = post.scale_back(b, sz_orig, sz_used)

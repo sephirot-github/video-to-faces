@@ -32,13 +32,13 @@ def random_balanced_sampler(gtidx, num, pos_fraction):
     return pos[perm1], neg[perm2]
 
 
-def get_losses(gtboxes, priors, regs, logs):
+def get_losses(gtboxes, priors, regs, logs, bg_iou, fg_iou, batch, pos_ratio):
     lg, lb, inp, trg = [], [], [], []
+    priors_xy = bbox.convert_to_xyxy(priors)
     for i in range(len(gtboxes)):
-        gtidx = assign_gt_to_priors(gtboxes[i], priors, 0.3, 0.7, True)
-        pos, neg = random_balanced_sampler(gtidx, 256, 0.5)
+        gtidx = assign_gt_to_priors(gtboxes[i], priors_xy, bg_iou, fg_iou, True)
+        pos, neg = random_balanced_sampler(gtidx, batch, pos_ratio)
         all_ = torch.cat([pos, neg])
-        #print(logs[i][:5])
         logits = logs[i][all_].squeeze()
         labels = gtidx[all_].clamp(max=1)
         inputs = regs[i][pos]
@@ -48,8 +48,6 @@ def get_losses(gtboxes, priors, regs, logs):
         inp.append(inputs)
         trg.append(targets)
     lg, lb, inp, trg = [torch.cat(x) for x in [lg, lb, inp, trg]]
-    #print(lg.shape, lg[:20])
-    #print(lb.shape, lb[:20])
     loss_obj = F.binary_cross_entropy_with_logits(lg, lb.to(torch.float32))
     loss_reg = F.smooth_l1_loss(inp, trg, beta=1/9, reduction='sum') / (lg.numel())
     return loss_obj, loss_reg

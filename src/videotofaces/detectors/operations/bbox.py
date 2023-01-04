@@ -1,46 +1,27 @@
 import torch
 
 
-def encode(reference_boxes, proposals, weights):
-    """
-    Encode a set of proposals with respect to some
-    reference boxes
-    Args:
-        reference_boxes (Tensor): reference boxes
-        proposals (Tensor): boxes to be encoded
-        weights (Tensor[4]): the weights for ``(x, y, w, h)``
-    """
-    wx = weights[0]
-    wy = weights[1]
-    ww = weights[2]
-    wh = weights[3]
-    proposals_x1 = proposals[:, 0].unsqueeze(1)
-    proposals_y1 = proposals[:, 1].unsqueeze(1)
-    proposals_x2 = proposals[:, 2].unsqueeze(1)
-    proposals_y2 = proposals[:, 3].unsqueeze(1)
-    reference_boxes_x1 = reference_boxes[:, 0].unsqueeze(1)
-    reference_boxes_y1 = reference_boxes[:, 1].unsqueeze(1)
-    reference_boxes_x2 = reference_boxes[:, 2].unsqueeze(1)
-    reference_boxes_y2 = reference_boxes[:, 3].unsqueeze(1)
+def encode(boxes, priors, mults):
+    """boxes - (x1, y1, x2, y2), priors - (x1, y1, x2, y2)"""
+    bx = convert_to_cwh(boxes)
+    pr = convert_to_cwh(priors)
+    rel_xys = (bx[..., :2] - pr[..., :2]) / pr[..., 2:] / mults[0]
+    rel_whs = torch.log(bx[..., 2:] / pr[..., 2:]) / mults[1]
+    return torch.cat([rel_xys, rel_whs], dim=-1)
 
-    # implementation starts here
-    ex_widths = proposals_x2 - proposals_x1
-    ex_heights = proposals_y2 - proposals_y1
-    ex_ctr_x = proposals_x1 + 0.5 * ex_widths
-    ex_ctr_y = proposals_y1 + 0.5 * ex_heights
 
-    gt_widths = reference_boxes_x2 - reference_boxes_x1
-    gt_heights = reference_boxes_y2 - reference_boxes_y1
-    gt_ctr_x = reference_boxes_x1 + 0.5 * gt_widths
-    gt_ctr_y = reference_boxes_y1 + 0.5 * gt_heights
+def convert_to_cwh(boxes):
+    """from (x1, y1, x2, y2) to (cx, cy, w, h)"""
+    boxes[..., 2:] -= boxes[..., :2]
+    boxes[..., :2] += boxes[..., 2:] * 0.5
+    return boxes
 
-    targets_dx = wx * (gt_ctr_x - ex_ctr_x) / ex_widths
-    targets_dy = wy * (gt_ctr_y - ex_ctr_y) / ex_heights
-    targets_dw = ww * torch.log(gt_widths / ex_widths)
-    targets_dh = wh * torch.log(gt_heights / ex_heights)
 
-    targets = torch.cat((targets_dx, targets_dy, targets_dw, targets_dh), dim=1)
-    return targets
+def convert_to_xyxy(boxes):
+    """from (cx, cy, w, h) to (x1, y1, x2, y2)"""
+    boxes[..., :2] -= boxes[..., 2:] * 0.5
+    boxes[..., 2:] += boxes[..., :2]
+    return boxes
 
 
 def calc_iou_matrix(a, b, plus1=False):

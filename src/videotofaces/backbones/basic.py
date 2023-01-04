@@ -12,6 +12,9 @@ class ConvUnit(nn.Module):
         
         if bn == None:
             self.bn = None
+        elif isinstance(bn, tuple) and bn[1] == 'frozen':
+            self.bn = nn.BatchNorm2d(cout, eps=bn[0])
+            self.bn.training = False
         else:
             self.bn = nn.BatchNorm2d(cout, eps=bn)
 
