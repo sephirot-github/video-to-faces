@@ -23,7 +23,9 @@ class RegionProposalNetwork(nn.Module):
         n = x.shape[0]
         x = self.conv(x)
         reg = self.reg(x).permute(0, 2, 3, 1).reshape(n, -1, 4)
-        log = self.log(x).permute(0, 2, 3, 1).reshape(n, -1, 1)
+        log = self.log(x)
+        print(log.shape, log[1][5][10][:5])
+        log = log.permute(0, 2, 3, 1).reshape(n, -1, 1)
         return reg, log
 
     def filt_dec(self, regs, logs, priors, lvtop):
@@ -39,7 +41,11 @@ class RegionProposalNetwork(nn.Module):
 
     def forward(self, fmaps, gtboxes, priors, imsizes, cfg):
         tuples = [self.head(x) for x in fmaps]
-        regs, logs = map(list, zip(*tuples))      
+        regs, logs = map(list, zip(*tuples))
+
+        logs1 = torch.cat(logs, axis=1)
+        print('hello1')
+        print(logs1.shape, logs1[0][:5, 0], logs1[1][:5, 0])
         
         boxes, logits, lvlen = self.filt_dec(regs, logs, priors, cfg['lvtop'])
         boxes = torch.cat(boxes, axis=1)
@@ -61,15 +67,14 @@ class RegionProposalNetwork(nn.Module):
         if not self.training:
             return boxes, imidx, None
         else:
-            reg = torch.cat(regs, axis=1).reshape(-1, 4)
-            log = torch.cat(logs, axis=1).flatten()
+            regs = torch.cat(regs, axis=1)#.view(-1, 4)
+            logs = torch.cat(logs, axis=1)#.view(-1)
+            print('hello2')
+            print(logs.shape, logs[0][:5, 0], logs[1][:5, 0])
             priors = post.convert_to_xyxy(torch.cat(priors))
             torch.manual_seed(0)
-            sidx_pos, sidx = loss.get_sidx(gtboxes, priors)
-            #loss_obj = F.binary_cross_entropy_with_logits(objectness[sidx], labels[sidx])
-            #enc = reg[sidx_pos]
-            #loss_reg = F.smooth_l1_loss(enc, gtboxes[sidx_pos], beta=1/9, reduction='sum') / (sidx.numel())
-            return boxes, imidx, (sidx_pos, sidx)
+            loss_obj, loss_reg = loss.get_losses(gtboxes, priors, regs, logs)
+            return boxes, imidx, (loss_obj, loss_reg)
 
 
 class RoIProcessingNetwork(nn.Module):
@@ -250,6 +255,7 @@ class FasterRCNN(nn.Module):
         priors = post.get_priors(x.shape[2:], self.bases, dv, 'corner', priors_patches, concat=False)
         xs = self.body(x)
         xs = self.fpn(xs)
+        print(len(xs), xs[0].shape, xs[0][1][100][4][:10])
         p, imidx, p_losses = self.rpn(xs, gtboxes, priors, sz_used, self.cfg)
         b, s, c = self.roi(p, imidx, xs[:-1], strides[:-1], sz_used, self.cfg)
         b = post.scale_back(b, sz_orig, sz_used)
