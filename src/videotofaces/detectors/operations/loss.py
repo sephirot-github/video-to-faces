@@ -1,12 +1,12 @@
 import torch
 import torch.nn.functional as F
 
-from . import bbox
+from .bbox import calc_iou_matrix, convert_to_xyxy, encode_boxes
 
 
 def assign_gt_to_priors(gtboxes, priors, low_thr, high_thr, match_low_quality):
     """"""
-    m = bbox.calc_iou_matrix(gtboxes, priors)
+    m = calc_iou_matrix(gtboxes, priors)
     v, idx = m.max(dim=0)
     idx += 1
     if match_low_quality:
@@ -32,17 +32,17 @@ def random_balanced_sampler(gtidx, num, pos_fraction):
     return pos[perm1], neg[perm2]
 
 
-def get_losses(gtboxes, priors, regs, logs, bg_iou, fg_iou, batch, pos_ratio):
+def get_losses(gtboxes, priors, regs, logs, bg_iou, fg_iou, match_lq, batch, pos_ratio):
     lg, lb, inp, trg = [], [], [], []
-    priors_xy = bbox.convert_to_xyxy(priors)
+    priors_xy = convert_to_xyxy(priors)
     for i in range(len(gtboxes)):
-        gtidx = assign_gt_to_priors(gtboxes[i], priors_xy, bg_iou, fg_iou, True)
+        gtidx = assign_gt_to_priors(gtboxes[i], priors_xy, bg_iou, fg_iou, match_lq)
         pos, neg = random_balanced_sampler(gtidx, batch, pos_ratio)
         all_ = torch.cat([pos, neg])
         logits = logs[i][all_].squeeze()
         labels = gtidx[all_].clamp(max=1)
         inputs = regs[i][pos]
-        targets = bbox.encode(gtboxes[i][gtidx[pos] - 1], priors[pos], (1, 1, 1, 1))
+        targets = encode_boxes(gtboxes[i][gtidx[pos] - 1], priors[pos], (1, 1, 1, 1))
         lg.append(logits)
         lb.append(labels)
         inp.append(inputs)

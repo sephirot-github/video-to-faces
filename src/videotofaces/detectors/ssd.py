@@ -4,9 +4,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.ops
 
-from .operations import prep, post
 from ..backbones.basic import ConvUnit, BaseMultiReturn
 from ..backbones.mobilenet import MobileNetV2, MobileNetV3L
+from .operations.anchor import get_priors, make_anchors
+from .operations.bbox import clamp_to_canvas, decode_boxes, remove_small, scale_boxes
+from .operations.post import top_per_class, top_per_level
+from .operations.prep import preprocess
 from ..utils.weights import load_weights
 
 # SSD paper: https://arxiv.org/pdf/1512.02325.pdf
@@ -207,7 +210,7 @@ class SSD(nn.Module):
         backend, means, stdvs = self.cfg['resize'], self.cfg['means'], self.cfg['stdvs']
         bckg_first = self.cfg['bckg_class_first']
 
-        x, sz_orig, sz_used = prep.full(imgs, dv, self.canvas_size, backend, False, 1, means, stdvs)
+        x, sz_orig, sz_used = preprocess(imgs, dv, self.canvas_size, backend, False, 1, means, stdvs)
         #return x
         xs = self.backbone(x)
         #return xs
@@ -218,10 +221,10 @@ class SSD(nn.Module):
         reg = torch.cat(reg, dim=1)
         scr = F.softmax(cls, dim=-1)
         scr = scr[:, :, :-1] if not bckg_first else scr[:, :, 1:]
-        priors = post.get_priors(x.shape[2:], self.bases)
+        priors = get_priors(x.shape[2:], self.bases)
         #return reg, cls, priors
         b, s, c = self.postprocess(reg, scr, priors, sz_used, lvlen, self.cfg)
-        b = post.scale_back(b, sz_orig, sz_used)
+        b = scale_boxes(b, sz_orig, sz_used)
         b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
         return b, s, c
 
@@ -249,7 +252,7 @@ class SSD(nn.Module):
         anchors = []
         for i in range(len(strides)):
             r = [1, 2, 0.5] + ([3, 1/3] if ar3flags[i] else [])
-            a = post.make_anchors([sz[i]], ratios=r)[0]
+            a = make_anchors([sz[i]], ratios=r)[0]
             extra = np.sqrt(sz[i + 1] / sz[i]) * sz[i]
             a.insert(1, (extra, extra))
             if cfg['anchors_clamp']:
@@ -261,19 +264,19 @@ class SSD(nn.Module):
         n, dim, num_classes = scr.shape
         reg, scr = reg.reshape(-1, 4), scr.flatten()
         fidx = torch.nonzero(scr > cfg['score_thr']).squeeze()
-        fidx = post.top_per_level(fidx, scr, cfg['lvtop'], lvlen, n, mult=num_classes)
+        fidx = top_per_level(fidx, scr, cfg['lvtop'], lvlen, n, mult=num_classes)
         scores = scr[fidx]
         classes = fidx % num_classes + (0 if not self.cfg['bckg_class_first'] else 1)
         idx = torch.div(fidx, num_classes, rounding_mode='floor')
         imidx = idx.div(dim, rounding_mode='floor')
 
         if cfg['cltop']:
-            sel = post.top_per_class(scores, classes, imidx, cfg['cltop'])
+            sel = top_per_class(scores, classes, imidx, cfg['cltop'])
             scores, classes, imidx, idx = [x[sel] for x in [scores, classes, imidx, idx]]
         
-        boxes = post.decode_boxes(reg[idx], priors[idx % dim], mults=(0.1, 0.2), clamp=True)
-        boxes = post.clamp_to_canvas(boxes, sz_used, imidx)
-        boxes, scores, classes, imidx = post.remove_small(boxes, 0, scores, classes, imidx)
+        boxes = decode_boxes(reg[idx], priors[idx % dim], mults=(0.1, 0.2), clamp=True)
+        boxes = clamp_to_canvas(boxes, sz_used, imidx)
+        boxes, scores, classes, imidx = remove_small(boxes, 0, scores, classes, imidx)
         res = []
         for i in range(n):
             bi, si, ci = [x[imidx == i] for x in [boxes, scores, classes]]

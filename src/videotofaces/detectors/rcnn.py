@@ -3,11 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.ops
 
-from .operations import prep, post, bbox, loss
-from .components.fpn import FeaturePyramidNetwork
 from ..backbones.basic import ConvUnit
 from ..backbones.resnet import ResNet50
 from ..backbones.mobilenet import MobileNetV3L
+from .components.fpn import FeaturePyramidNetwork
+from .operations.anchor import get_priors, make_anchors
+from .operations.bbox import clamp_to_canvas, convert_to_cwh, decode_boxes, remove_small, scale_boxes
+from .operations.loss import get_losses
+from .operations.post import get_lvidx, roi_align_multilevel
+from .operations.prep import preprocess
 from ..utils.weights import load_weights
 
 
@@ -33,7 +37,7 @@ class RegionProposalNetwork(nn.Module):
             log, top = log.topk(min(lvtop, log.shape[1]), dim=1)
             reg = reg.gather(1, top.expand(-1, -1, 4))
             pri = p.expand(n, -1, -1).gather(1, top.expand(-1, -1, 4))
-            boxes = post.decode_boxes(reg, pri, mults=(1, 1), clamp=True)
+            boxes = decode_boxes(reg, pri, mults=(1, 1), clamp=True)
             res.append((boxes, log, log.shape[1]))
         return map(list, zip(*res))
 
@@ -53,9 +57,9 @@ class RegionProposalNetwork(nn.Module):
         boxes, obj = boxes[idx], obj[idx]
         imidx = idx.div(dim, rounding_mode='floor')
 
-        boxes = post.clamp_to_canvas(boxes, imsizes, imidx)
-        boxes, obj, idx, imidx = post.remove_small(boxes, cfg['min_size1'], obj, idx, imidx)
-        groups = imidx * 10 + post.get_lvidx(idx % dim, lvlen)
+        boxes = clamp_to_canvas(boxes, imsizes, imidx)
+        boxes, obj, idx, imidx = remove_small(boxes, cfg['min_size1'], obj, idx, imidx)
+        groups = imidx * 10 + get_lvidx(idx % dim, lvlen)
         keep = torchvision.ops.batched_nms(boxes, obj, groups, cfg['iou_thr1'])
         keep = torch.cat([keep[imidx[keep] == i][:cfg['imtop1']] for i in range(n)])
         boxes, imidx = boxes[keep], imidx[keep]
@@ -66,7 +70,7 @@ class RegionProposalNetwork(nn.Module):
             regs = torch.cat(regs, axis=1)#.view(-1, 4)
             logs = torch.cat(logs, axis=1)#.view(-1)
             priors = torch.cat(priors)
-            loss_obj, loss_reg = loss.get_losses(gtboxes, priors, regs, logs, 0.3, 0.7, 256, 0.5)
+            loss_obj, loss_reg = get_losses(gtboxes, priors, regs, logs, 0.3, 0.7, True, 256, 0.5)
             return boxes, imidx, (loss_obj, loss_reg)
 
 
@@ -95,7 +99,7 @@ class RoIProcessingNetwork(nn.Module):
         return a, b
     
     def forward(self, proposals, imidx, fmaps, fmaps_strides, imsizes, cfg):
-        roi_maps = post.roi_align_multilevel(proposals, imidx, fmaps, fmaps_strides, self.ralign_set)
+        roi_maps = roi_align_multilevel(proposals, imidx, fmaps, fmaps_strides, self.ralign_set)
         reg, log = self.heads(roi_maps)
        
         reg = reg.reshape(reg.shape[0], -1, 4)
@@ -112,10 +116,10 @@ class RoIProcessingNetwork(nn.Module):
         idx = fidx.div(dim, rounding_mode='floor')
         proposals, imidx = proposals[idx], imidx[idx]
 
-        proposals = post.convert_to_cwh(proposals)
-        boxes = post.decode_boxes(reg, proposals, mults=(0.1, 0.2), clamp=True)
-        boxes = post.clamp_to_canvas(boxes, imsizes, imidx)
-        boxes, scr, cls, imidx = post.remove_small(boxes, cfg['min_size2'], scr, cls, imidx)
+        proposals = convert_to_cwh(proposals, in_place=True)
+        boxes = decode_boxes(reg, proposals, mults=(0.1, 0.2), clamp=True)
+        boxes = clamp_to_canvas(boxes, imsizes, imidx)
+        boxes, scr, cls, imidx = remove_small(boxes, cfg['min_size2'], scr, cls, imidx)
         
         #groups = imidx * 1000 + cls
         #keep = torchvision.ops.batched_nms(boxes, scr, groups, cfg['iou_thr2'])
@@ -196,13 +200,13 @@ class FasterRCNN(nn.Module):
     def config_resnet(self, cfg):
         cfg.update(bbone='resnet50', resnet_bn_eps=1e-5)
         cfg.update(cins=[256, 512, 1024, 2048], strides=[4, 8, 16, 32, 64])
-        cfg.update(anchors=post.make_anchors([32, 64, 128, 256, 512], [1], [2, 1, 0.5], cfg['round_anchors']))
+        cfg.update(anchors=make_anchors([32, 64, 128, 256, 512], [1], [2, 1, 0.5], cfg['round_anchors']))
         return cfg
 
     def config_mobile(self, cfg):
         cfg.update(bbone='mobilenetv3l')
         cfg.update(cins=[160, 960], strides=[32, 32, 64])
-        cfg.update(anchors=post.make_anchors([32, 32, 32], [1, 2, 4, 8, 16], [2, 1, 0.5], cfg['round_anchors']))
+        cfg.update(anchors=make_anchors([32, 32, 32], [1, 2, 4, 8, 16], [2, 1, 0.5], cfg['round_anchors']))
         return cfg
 
     def get_config(self, src, arch, version=None):
@@ -248,17 +252,18 @@ class FasterRCNN(nn.Module):
         strides = self.cfg['strides']
         gtboxes, gtclasses = targets if targets else (None, None)
 
-        x, sz_orig, sz_used = prep.full(imgs, dv, resize, resize_with)
+        x, sz_orig, sz_used = preprocess(imgs, dv, resize, resize_with)
         if self.training:
-            scales = torch.tensor(sz_used) / torch.tensor(sz_orig)
-            scales = scales.flip(1).repeat(1, 2)
-            gtboxes = [gtboxes[i] * scales[i] for i in range(len(gtboxes))]
-        priors = post.get_priors(x.shape[2:], self.bases, dv, 'corner', priors_patches, concat=False)
+            gtboxes = scale_boxes(gtboxes, sz_used, sz_orig)
+            #scales = torch.tensor(sz_used) / torch.tensor(sz_orig)
+            #scales = scales.flip(1).repeat(1, 2)
+            #gtboxes = [gtboxes[i] * scales[i] for i in range(len(gtboxes))]
+        priors = get_priors(x.shape[2:], self.bases, dv, 'corner', priors_patches, concat=False)
         xs = self.body(x)
         xs = self.fpn(xs)
         p, imidx, p_losses = self.rpn(xs, gtboxes, priors, sz_used, self.cfg)
         b, s, c = self.roi(p, imidx, xs[:-1], strides[:-1], sz_used, self.cfg)
-        b = post.scale_back(b, sz_orig, sz_used)
+        b = scale_boxes(b, sz_orig, sz_used)
         b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
         if not self.training:
             return b, s, c

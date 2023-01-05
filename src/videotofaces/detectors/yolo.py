@@ -6,9 +6,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.ops
 
-from .operations import prep, post
+from .operations.anchor import get_priors
+from .operations.bbox import decode_boxes, scale_boxes
+from .operations.post import get_lvidx
+from .operations.prep import preprocess
 from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV2
+
 from ..utils import prep_weights_file
 from ..utils.weights import load_weights
 
@@ -174,13 +178,13 @@ class YOLOv3(nn.Module):
   
     def forward(self, imgs):
         dv = next(self.parameters()).device
-        x, szo, sz = prep.full(imgs, dv, self.canvas_size, 'cv2', **self.norm)
+        x, szo, sz = preprocess(imgs, dv, self.canvas_size, 'cv2', **self.norm)
         xs = self.backbone(x)
         xs = self.neck(xs)
         xs = self.head(xs)
-        priors = post.get_priors(x.shape[-2:], self.bases, 'cpu', 'center')
+        priors = get_priors(x.shape[-2:], self.bases, 'cpu', 'center')
         b, s, c = self.postprocess(xs, priors, self.num_classes)
-        b = post.scale_back(b, szo, sz)
+        b = scale_boxes(b, szo, sz)
         b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
         return b, s, c
 
@@ -211,9 +215,9 @@ class YOLOv3(nn.Module):
         imidx = idx.div(dim, rounding_mode='floor')
 
         strides = [bs[0] for bs in self.bases]
-        lvidx = post.get_lvidx(idx % dim, map_sizes)
+        lvidx = get_lvidx(idx % dim, map_sizes)
         stidx = torch.tensor(strides)[lvidx].unsqueeze(-1)
-        b = post.decode_boxes(reg[idx], priors[idx % dim], mode='yolo', strides=stidx)
+        b = decode_boxes(reg[idx], priors[idx % dim], mode='yolo', strides=stidx)
 
         res = []
         for i in range(n):

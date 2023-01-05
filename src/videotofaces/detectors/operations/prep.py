@@ -7,8 +7,8 @@ import torch.nn.functional as F
 # source: https://github.com/pytorch/vision/blob/main/torchvision/models/detection/transform.py
 
 
-def full(imgs, dv, resize, resize_with='cv2', keep_ratio=True, size_divisible=32,
-         means='imagenet', stdvs='imagenet', to_rgb=True):
+def preprocess(imgs, dv, resize, resize_with='cv2', keep_ratio=True, size_divisible=32,
+               means='imagenet', stdvs='imagenet', to_rgb=True):
     assert resize_with in ['cv2', 'torch']
     if not isinstance(resize, tuple):
         resize = (resize, resize)
