@@ -14,8 +14,7 @@ from .operations.post import get_lvidx, roi_align_multilevel
 from .operations.prep import preprocess
 from ..utils.weights import load_weights
 
-from .operations.loss import assign_gt_to_priors, random_balanced_sampler
-from .operations.bbox import encode_boxes
+from .operations.loss import match_with_targets
 
 
 class RegionProposalNetwork(nn.Module):
@@ -45,12 +44,15 @@ class RegionProposalNetwork(nn.Module):
         return map(list, zip(*res))
 
     def forward(self, fmaps, priors, imsizes, cfg, gtboxes):
+        lvtop = cfg['lvtop'][0] if not self.training else cfg['lvtop'][1]
+        imtop = cfg['imtop1'][0] if not self.training else cfg['imtop1'][1]
+
         tuples = [self.head(x) for x in fmaps]
         regs, logs = map(list, zip(*tuples))
         
         dregs = [x.detach() for x in regs]
         dlogs = [x.detach() for x in logs]
-        boxes, logits, lvlen = self.filt_dec(dregs, dlogs, priors, cfg['lvtop'])
+        boxes, logits, lvlen = self.filt_dec(dregs, dlogs, priors, lvtop)
         boxes = torch.cat(boxes, axis=1)
         obj = torch.cat(logits, axis=1).sigmoid()
 
@@ -64,7 +66,7 @@ class RegionProposalNetwork(nn.Module):
         boxes, obj, idx, imidx = remove_small(boxes, cfg['min_size1'], obj, idx, imidx)
         groups = imidx * 10 + get_lvidx(idx % dim, lvlen)
         keep = torchvision.ops.batched_nms(boxes, obj, groups, cfg['iou_thr1'])
-        keep = torch.cat([keep[imidx[keep] == i][:cfg['imtop1']] for i in range(n)])
+        keep = torch.cat([keep[imidx[keep] == i][:imtop] for i in range(n)])
         boxes, imidx = boxes[keep], imidx[keep]
 
         if not self.training:
@@ -101,27 +103,26 @@ class RoIProcessingNetwork(nn.Module):
         b = self.cls(x)
         return a, b
     
-    def forward(self, proposals, imidx, fmaps, fmaps_strides, imsizes, cfg, gtboxes, gtlabels):
+    def forward(self, proposals, imidx, fmaps, fmaps_strides, imsizes, cfg, gtb, gtl):
         if self.training:
-            proposals = [proposals[imidx == i] for i in range(len(gtboxes))]
-            proposals = [torch.cat([p, b]) for p, b in zip(proposals, gtboxes)]
+            proposals = [proposals[imidx == i] for i in range(len(gtb))]
+            proposals = [torch.cat([p, b.to(torch.float32)]) for p, b in zip(proposals, gtb)]
+            targets, labels, sidx, _ = match_with_targets(gtb, gtl, proposals, 0.5, 0.5, False, 512, 0.25)
+            for lb in labels: print(lb.shape, lb[:10])
+            proposals = [p[sampled] for p, sampled in zip(proposals, sidx)]
             imidx = [torch.full([len(p)], i) for i, p in enumerate(proposals)]
-            fproposals, imidx = [torch.cat(x) for x in [proposals, imidx]]
-            
-            for i in range(len(gtboxes)):
-                gtidx = assign_gt_to_priors(gtboxes[i], proposals[i], 0.5, 0.5, False)
-                pos, neg = random_balanced_sampler(gtidx, 512, 0.25)
-                all_ = torch.cat([pos, neg])
-                mlabels = gtlabels[i][gtidx[all_] - 1]
-                mbboxes = gtboxes[i][gtidx[pos] - 1]
-                targets = encode_boxes(mbboxes, proposals[i][pos], (0.1, 0.2))
-                proposals[i] = proposals[i][all_]
-
-            loss_cls, loss_reg = torch.tensor(1), torch.tensor(1)
-            return loss_cls, loss_reg
+            proposals, imidx = [torch.cat(x) for x in [proposals, imidx]]
         
+        #print(proposals.shape); print(proposals[:10]); print(proposals[510:520]); print(proposals[-10:])
         roi_maps = roi_align_multilevel(proposals, imidx, fmaps, fmaps_strides, self.ralign_set)
         reg, log = self.heads(roi_maps)
+
+        if self.training:
+            labels = torch.cat(labels)
+            loss_cls = F.cross_entropy(log, labels)
+            reg = reg.reshape(reg.shape[0], -1, 4)
+            loss_reg = F.smooth_l1_loss(reg[labels > 0, labels[labels > 0]], torch.cat(targets), beta=1/9, reduction='sum') / labels.numel()
+            return loss_cls, loss_reg
        
         reg = reg.reshape(reg.shape[0], -1, 4)
         scr = F.softmax(log, dim=-1)
@@ -192,7 +193,7 @@ class FasterRCNN(nn.Module):
         cfg = {}
         cfg.update(fpn_batchnorm=None, rpn_convdepth=1, roi_convdepth=0, roi_mlp_depth=2)
         cfg.update(resize_min=800, resize_max=1333)
-        cfg.update(score_thr1=0.0, iou_thr1=0.7, imtop1=1000, min_size1=0, lvtop=1000)
+        cfg.update(score_thr1=0.0, iou_thr1=0.7, imtop1=(1000, 2000), min_size1=0, lvtop=(1000, 2000))
         cfg.update(score_thr2=0.05, iou_thr2=0.5, imtop2=100, min_size2=0)
         cfg.update(weights_add_nbatches=False)
         return cfg

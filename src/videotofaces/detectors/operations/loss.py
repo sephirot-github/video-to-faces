@@ -27,8 +27,6 @@ def random_balanced_sampler(gtidx, num, pos_fraction):
     nn = min(neg.numel(), num - np)
     perm1 = torch.randperm(pos.numel())[:np]
     perm2 = torch.randperm(neg.numel())[:nn]
-    perm1 = torch.sort(perm1)[0]
-    perm2 = torch.sort(perm2)[0]
     return pos[perm1], neg[perm2]
 
 
@@ -51,3 +49,29 @@ def get_losses(gtboxes, priors, regs, logs, bg_iou, fg_iou, match_lq, batch, pos
     loss_obj = F.binary_cross_entropy_with_logits(lg, lb.to(torch.float32))
     loss_reg = F.smooth_l1_loss(inp, trg, beta=1/9, reduction='sum') / (lg.numel())
     return loss_obj, loss_reg
+
+
+def match_with_targets(gtboxes, gtlabels, priors, bg_iou, fg_iou, match_lq, batch, pos_ratio):
+    mt, ml, sa, sp = [], [], [], []
+    for i in range(len(gtboxes)):
+        gtidx = assign_gt_to_priors(gtboxes[i], priors[i], bg_iou, fg_iou, match_lq)
+        pos, neg = random_balanced_sampler(gtidx, batch, pos_ratio)
+        all_ = torch.cat([pos, neg])
+        matched_targets = gtboxes[i][gtidx[pos] - 1]
+        if gtlabels is None:
+            matched_labels = gtidx[all_].clamp(max=1)
+        else:
+            matched_labels = gtidx[all_]
+            #matched_labels[gtidx[all_] > 0] = gtlabels[i][gtidx[pos] - 1]
+        mt.append(matched_targets)
+        ml.append(matched_labels)
+        sa.append(all_)
+        sp.append(pos)
+    return mt, ml, sa, sp
+
+
+
+
+
+
+
