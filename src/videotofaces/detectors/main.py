@@ -51,8 +51,10 @@ class Detector():
         if not train:
             self.model.eval()
 
-    def __call__(self, imgs, targets=None):
+    def __call__(self, imgs, targets=None, seed=None):
         if self.model.training:
+            if seed is not None:
+                torch.manual_seed(seed)
             return self.model(imgs, targets)
         else:
             with torch.inference_mode():

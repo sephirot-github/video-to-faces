@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-from .bbox import calc_iou_matrix, convert_to_xyxy, encode_boxes
+from .bbox import calc_iou_matrix, convert_to_xyxy, convert_to_cwh, encode_boxes
 
 
 def assign_gt_to_priors(gtboxes, priors, low_thr, high_thr, match_low_quality):
@@ -23,7 +23,7 @@ def assign_gt_to_priors(gtboxes, priors, low_thr, high_thr, match_low_quality):
 def random_balanced_sampler(gtidx, num, pos_fraction):
     pos = torch.nonzero(gtidx >= 1).squeeze()
     neg = torch.nonzero(gtidx == 0).squeeze()
-    np = min(pos.numel(), int(num * 0.5))
+    np = min(pos.numel(), int(num * pos_fraction))
     nn = min(neg.numel(), num - np)
     perm1 = torch.randperm(pos.numel())[:np]
     perm2 = torch.randperm(neg.numel())[:nn]
@@ -57,12 +57,14 @@ def match_with_targets(gtboxes, gtlabels, priors, bg_iou, fg_iou, match_lq, batc
         gtidx = assign_gt_to_priors(gtboxes[i], priors[i], bg_iou, fg_iou, match_lq)
         pos, neg = random_balanced_sampler(gtidx, batch, pos_ratio)
         all_ = torch.cat([pos, neg])
-        matched_targets = gtboxes[i][gtidx[pos] - 1]
+        all_ = torch.sort(all_)[0]
+        pos = torch.sort(pos)[0]
+        matched_targets = encode_boxes(gtboxes[i][gtidx[pos] - 1], convert_to_cwh(priors[i][pos]), (0.1, 0.2))
         if gtlabels is None:
             matched_labels = gtidx[all_].clamp(max=1)
         else:
+            gtidx[pos] = gtlabels[i][gtidx[pos] - 1]
             matched_labels = gtidx[all_]
-            #matched_labels[gtidx[all_] > 0] = gtlabels[i][gtidx[pos] - 1]
         mt.append(matched_targets)
         ml.append(matched_labels)
         sa.append(all_)

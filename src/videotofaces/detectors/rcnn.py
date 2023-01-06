@@ -15,6 +15,7 @@ from .operations.prep import preprocess
 from ..utils.weights import load_weights
 
 from .operations.loss import match_with_targets
+from .operations.bbox import encode_boxes
 
 
 class RegionProposalNetwork(nn.Module):
@@ -105,23 +106,26 @@ class RoIProcessingNetwork(nn.Module):
     
     def forward(self, proposals, imidx, fmaps, fmaps_strides, imsizes, cfg, gtb, gtl):
         if self.training:
+            # to list
             proposals = [proposals[imidx == i] for i in range(len(gtb))]
             proposals = [torch.cat([p, b.to(torch.float32)]) for p, b in zip(proposals, gtb)]
+            # main
             targets, labels, sidx, _ = match_with_targets(gtb, gtl, proposals, 0.5, 0.5, False, 512, 0.25)
-            for lb in labels: print(lb.shape, lb[:10])
             proposals = [p[sampled] for p, sampled in zip(proposals, sidx)]
+            # back to joined
             imidx = [torch.full([len(p)], i) for i, p in enumerate(proposals)]
             proposals, imidx = [torch.cat(x) for x in [proposals, imidx]]
         
-        #print(proposals.shape); print(proposals[:10]); print(proposals[510:520]); print(proposals[-10:])
         roi_maps = roi_align_multilevel(proposals, imidx, fmaps, fmaps_strides, self.ralign_set)
         reg, log = self.heads(roi_maps)
 
         if self.training:
             labels = torch.cat(labels)
+            targets = torch.cat(targets)
             loss_cls = F.cross_entropy(log, labels)
             reg = reg.reshape(reg.shape[0], -1, 4)
-            loss_reg = F.smooth_l1_loss(reg[labels > 0, labels[labels > 0]], torch.cat(targets), beta=1/9, reduction='sum') / labels.numel()
+            reg = reg[labels > 0, labels[labels > 0] - 1] # minus 1 because we removed the bckg class
+            loss_reg = F.smooth_l1_loss(reg, targets, beta=1/9, reduction='sum') / labels.numel()
             return loss_cls, loss_reg
        
         reg = reg.reshape(reg.shape[0], -1, 4)
@@ -266,8 +270,8 @@ class FasterRCNN(nn.Module):
         strides = self.cfg['strides']
         
         x, sz_orig, sz_used = preprocess(imgs, dv, resize, resize_with)
-        gtb = None if not self.training else scale_boxes(targets[0], sz_used, sz_orig)
-        gtl = None if not self.training else targets[1]
+        gtb = None if not self.training else scale_boxes([torch.tensor(t) for t in targets[0]], sz_used, sz_orig)
+        gtl = None if not self.training else [torch.tensor(t) for t in targets[1]]
         priors = get_priors(x.shape[2:], self.bases, dv, 'corner', priors_patches, concat=False)
         xs = self.body(x)
         xs = self.fpn(xs)

@@ -35,7 +35,7 @@ def exp_clamped(x, max_=None):
 
 
 def encode_boxes(boxes, priors, mults):
-    """boxes - (x1, y1, x2, y2), priors - (x1, y1, x2, y2)"""
+    """boxes - (x1, y1, x2, y2), priors - (cx, cy, w, h)"""
     boxes = convert_to_cwh(boxes)
     rel_xys = (boxes[..., :2] - priors[..., :2]) / priors[..., 2:] / mults[0]
     rel_whs = torch.log(boxes[..., 2:] / priors[..., 2:]) / mults[1]

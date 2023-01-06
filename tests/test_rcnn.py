@@ -4,6 +4,7 @@ import unittest
 import cv2
 import numpy as np
 
+from common import get_input_coco
 from videotofaces import Detector, detmodels
 
 
@@ -11,12 +12,24 @@ class TestRCNN(unittest.TestCase):
 
     def _run_inference(self, detmodels_val):
         model = Detector(detmodels_val)
-        testdir = osp.dirname(osp.realpath(__file__))
-        im1 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_000139.jpg'))
-        im2 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_455157.jpg'))
-        b, s, l = model([im1, im2])
+        imgs = get_input_coco()
+        b, s, l = model(imgs)
         self.assertEqual((len(b), len(s), len(l)), (2, 2, 2))
         return b, s, l
+
+    def _run_training(self, detmodels_val):
+        model = Detector(detmodels_val, train=True)
+        imgs, targ = get_input_coco(True)
+        ret = model(imgs, targ, seed=0)
+        self.assertEqual(len(ret), 4)
+        return [r.item() for r in ret]
+
+    def test_rcnn_torchvision_mobile_hires_T(self):
+        losses = self._run_training(detmodels.FasterRCNN_TorchVision_MobileNetV3L_HiRes)
+        self.assertAlmostEqual(losses[0], 0.09404, places=5)
+        self.assertAlmostEqual(losses[1], 0.05485, places=5)
+        self.assertAlmostEqual(losses[2], 0.34870, places=5)
+        self.assertAlmostEqual(losses[3], 0.45987, places=5)
 
     def test_rcnn_torchvision_v1(self):
         b, s, l = self._run_inference(detmodels.FasterRCNN_TorchVision_ResNet50_v1)
