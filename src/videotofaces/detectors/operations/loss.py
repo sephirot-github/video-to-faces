@@ -23,8 +23,8 @@ def assign_gt_to_priors(gtboxes, priors, low_thr, high_thr, match_low_quality):
 def random_balanced_sampler(gtidx, num, pos_fraction):
     pos = torch.nonzero(gtidx >= 1).squeeze()
     neg = torch.nonzero(gtidx == 0).squeeze()
-    np = min(pos.numel(), int(256 * 0.5))
-    nn = min(neg.numel(), 256 - np)
+    np = min(pos.numel(), int(num * 0.5))
+    nn = min(neg.numel(), num - np)
     perm1 = torch.randperm(pos.numel())[:np]
     perm2 = torch.randperm(neg.numel())[:nn]
     perm1 = torch.sort(perm1)[0]
@@ -42,7 +42,7 @@ def get_losses(gtboxes, priors, regs, logs, bg_iou, fg_iou, match_lq, batch, pos
         logits = logs[i][all_].squeeze()
         labels = gtidx[all_].clamp(max=1)
         inputs = regs[i][pos]
-        targets = encode_boxes(gtboxes[i][gtidx[pos] - 1], priors[pos], (1, 1, 1, 1))
+        targets = encode_boxes(gtboxes[i][gtidx[pos] - 1], priors[pos], (1, 1))
         lg.append(logits)
         lb.append(labels)
         inp.append(inputs)

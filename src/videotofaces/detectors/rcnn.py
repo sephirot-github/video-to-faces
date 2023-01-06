@@ -14,6 +14,9 @@ from .operations.post import get_lvidx, roi_align_multilevel
 from .operations.prep import preprocess
 from ..utils.weights import load_weights
 
+from .operations.loss import assign_gt_to_priors, random_balanced_sampler
+from .operations.bbox import encode_boxes
+
 
 class RegionProposalNetwork(nn.Module):
 
@@ -41,7 +44,7 @@ class RegionProposalNetwork(nn.Module):
             res.append((boxes, log, log.shape[1]))
         return map(list, zip(*res))
 
-    def forward(self, fmaps, gtboxes, priors, imsizes, cfg):
+    def forward(self, fmaps, priors, imsizes, cfg, gtboxes):
         tuples = [self.head(x) for x in fmaps]
         regs, logs = map(list, zip(*tuples))
         
@@ -67,8 +70,8 @@ class RegionProposalNetwork(nn.Module):
         if not self.training:
             return boxes, imidx, None
         else:
-            regs = torch.cat(regs, axis=1)#.view(-1, 4)
-            logs = torch.cat(logs, axis=1)#.view(-1)
+            regs = torch.cat(regs, axis=1)
+            logs = torch.cat(logs, axis=1)
             priors = torch.cat(priors)
             loss_obj, loss_reg = get_losses(gtboxes, priors, regs, logs, 0.3, 0.7, True, 256, 0.5)
             return boxes, imidx, (loss_obj, loss_reg)
@@ -98,7 +101,25 @@ class RoIProcessingNetwork(nn.Module):
         b = self.cls(x)
         return a, b
     
-    def forward(self, proposals, imidx, fmaps, fmaps_strides, imsizes, cfg):
+    def forward(self, proposals, imidx, fmaps, fmaps_strides, imsizes, cfg, gtboxes, gtlabels):
+        if self.training:
+            proposals = [proposals[imidx == i] for i in range(len(gtboxes))]
+            proposals = [torch.cat([p, b]) for p, b in zip(proposals, gtboxes)]
+            imidx = [torch.full([len(p)], i) for i, p in enumerate(proposals)]
+            fproposals, imidx = [torch.cat(x) for x in [proposals, imidx]]
+            
+            for i in range(len(gtboxes)):
+                gtidx = assign_gt_to_priors(gtboxes[i], proposals[i], 0.5, 0.5, False)
+                pos, neg = random_balanced_sampler(gtidx, 512, 0.25)
+                all_ = torch.cat([pos, neg])
+                mlabels = gtlabels[i][gtidx[all_] - 1]
+                mbboxes = gtboxes[i][gtidx[pos] - 1]
+                targets = encode_boxes(mbboxes, proposals[i][pos], (0.1, 0.2))
+                proposals[i] = proposals[i][all_]
+
+            loss_cls, loss_reg = torch.tensor(1), torch.tensor(1)
+            return loss_cls, loss_reg
+        
         roi_maps = roi_align_multilevel(proposals, imidx, fmaps, fmaps_strides, self.ralign_set)
         reg, log = self.heads(roi_maps)
        
@@ -121,27 +142,19 @@ class RoIProcessingNetwork(nn.Module):
         boxes = clamp_to_canvas(boxes, imsizes, imidx)
         boxes, scr, cls, imidx = remove_small(boxes, cfg['min_size2'], scr, cls, imidx)
         
+        res = []
+        for i in range(n):
+            bi, si, ci = [x[imidx == i] for x in [boxes, scr, cls]]
+            keep = torchvision.ops.batched_nms(bi, si, ci, cfg['iou_thr2'])[:cfg['imtop2']]
+            res.append((bi[keep], si[keep], ci[keep]))
+        return map(list, zip(*res))
         #groups = imidx * 1000 + cls
         #keep = torchvision.ops.batched_nms(boxes, scr, groups, cfg['iou_thr2'])
         #keep = torch.cat([keep[imidx[keep] == i][:cfg['imtop2']] for i in range(n)])
         #boxes, scr, cls, imidx = [x[keep] for x in [boxes, scr, cls, imidx]]
         #boxes, scr, cls = [[x[imidx == i] for i in range(n)] for x in [boxes, scr, cls]]
         #return boxes, scr, cls
-        res = []
-        for i in range(n):
-            bi, si, ci = [x[imidx == i] for x in [boxes, scr, cls]]
-            keep = torchvision.ops.batched_nms(bi, si, ci, cfg['iou_thr2'])[:cfg['imtop2']]
-            res.append((bi[keep], si[keep], ci[keep]))
-        if not self.training:
-            return map(list, zip(*res))
-        else:
-            return map(list, zip(*res))
-            #regs = torch.cat(regs, axis=1)#.view(-1, 4)
-            #logs = torch.cat(logs, axis=1)#.view(-1)
-            #priors = post.convert_to_xyxy(torch.cat(priors))
-            #loss_obj, loss_reg = loss.get_losses(gtboxes, priors, regs, logs, 0.5, 0.5, 512, 0.25)
-            #return boxes, imidx, (loss_obj, loss_reg)
-        
+
 
 class FasterRCNN(nn.Module):
 
@@ -250,22 +263,20 @@ class FasterRCNN(nn.Module):
         resize_with = self.cfg['prep_resize']
         priors_patches = self.cfg['priors_patches']
         strides = self.cfg['strides']
-        gtboxes, gtclasses = targets if targets else (None, None)
-
+        
         x, sz_orig, sz_used = preprocess(imgs, dv, resize, resize_with)
-        if self.training:
-            gtboxes = scale_boxes(gtboxes, sz_used, sz_orig)
-            #scales = torch.tensor(sz_used) / torch.tensor(sz_orig)
-            #scales = scales.flip(1).repeat(1, 2)
-            #gtboxes = [gtboxes[i] * scales[i] for i in range(len(gtboxes))]
+        gtb = None if not self.training else scale_boxes(targets[0], sz_used, sz_orig)
+        gtl = None if not self.training else targets[1]
         priors = get_priors(x.shape[2:], self.bases, dv, 'corner', priors_patches, concat=False)
         xs = self.body(x)
         xs = self.fpn(xs)
-        p, imidx, p_losses = self.rpn(xs, gtboxes, priors, sz_used, self.cfg)
-        b, s, c = self.roi(p, imidx, xs[:-1], strides[:-1], sz_used, self.cfg)
-        b = scale_boxes(b, sz_orig, sz_used)
-        b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
-        if not self.training:
-            return b, s, c
+        p, imidx, p_losses = self.rpn(xs, priors, sz_used, self.cfg, gtb)
+        ret = self.roi(p, imidx, xs[:-1], strides[:-1], sz_used, self.cfg, gtb, gtl)
+        if self.training:
+            d_losses = ret
+            return (*p_losses, *d_losses)
         else:
-            return p_losses
+            b, s, c = ret
+            b = scale_boxes(b, sz_orig, sz_used)
+            b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
+            return b, s, c
