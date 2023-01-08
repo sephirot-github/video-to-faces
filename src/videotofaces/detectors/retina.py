@@ -78,7 +78,7 @@ class RetinaFace_Biubug6(nn.Module):
             backbone = MobileNetV1(0.25, activ='lrelu_0.1', retidx=[5, 11, 13])
             cins, cout, activ = [64, 128, 256], 64, 'lrelu_0.1'
         else:
-            backbone = ResNet50(return_count=3)
+            backbone = ResNet50(retidx=[2, 3, 4])
             cins, cout, activ = [512, 1024, 2048], 256, 'relu'
         self.bases = list(zip([8, 16, 32], make_anchors([16, 64, 256], scales=[1, 2])))
         num_anchors = 2
@@ -176,7 +176,7 @@ class RetinaNet_TorchVision(nn.Module):
 
     def __init__(self, pretrained=True, device='cpu'):
         super().__init__()
-        backbone = ResNet50(return_count=3, bn_eps=0.0)
+        backbone = ResNet50(retidx=[2, 3, 4], bn=0.0)
         cins = [512, 1024, 2048]
         cout = 256
         strides = [8, 16, 32, 64, 128]

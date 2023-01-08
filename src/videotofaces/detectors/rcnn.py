@@ -9,13 +9,10 @@ from ..backbones.mobilenet import MobileNetV3L
 from .components.fpn import FeaturePyramidNetwork
 from .operations.anchor import get_priors, make_anchors
 from .operations.bbox import clamp_to_canvas, convert_to_cwh, decode_boxes, remove_small, scale_boxes
-from .operations.loss import get_losses
+from .operations.loss import get_losses, match_with_targets
 from .operations.post import get_lvidx, roi_align_multilevel
 from .operations.prep import preprocess
 from ..utils.weights import load_weights
-
-from .operations.loss import match_with_targets
-from .operations.bbox import encode_boxes
 
 
 class RegionProposalNetwork(nn.Module):
@@ -45,8 +42,8 @@ class RegionProposalNetwork(nn.Module):
         return map(list, zip(*res))
 
     def forward(self, fmaps, priors, imsizes, cfg, gtboxes):
-        lvtop = cfg['lvtop'][0] if not self.training else cfg['lvtop'][1]
-        imtop = cfg['imtop1'][0] if not self.training else cfg['imtop1'][1]
+        lvtop = cfg['lvtop'] if not self.training else cfg['lvtop_train']
+        imtop = cfg['imtop1'] if not self.training else cfg['imtop1_train']
 
         tuples = [self.head(x) for x in fmaps]
         regs, logs = map(list, zip(*tuples))
@@ -69,7 +66,7 @@ class RegionProposalNetwork(nn.Module):
         keep = torchvision.ops.batched_nms(boxes, obj, groups, cfg['iou_thr1'])
         keep = torch.cat([keep[imidx[keep] == i][:imtop] for i in range(n)])
         boxes, imidx = boxes[keep], imidx[keep]
-
+        
         if not self.training:
             return boxes, imidx, None
         else:
@@ -197,9 +194,11 @@ class FasterRCNN(nn.Module):
         cfg = {}
         cfg.update(fpn_batchnorm=None, rpn_convdepth=1, roi_convdepth=0, roi_mlp_depth=2)
         cfg.update(resize_min=800, resize_max=1333)
-        cfg.update(score_thr1=0.0, iou_thr1=0.7, imtop1=(1000, 2000), min_size1=0, lvtop=(1000, 2000))
+        cfg.update(score_thr1=0.0, iou_thr1=0.7, imtop1=1000, min_size1=0, lvtop=1000)
         cfg.update(score_thr2=0.05, iou_thr2=0.5, imtop2=100, min_size2=0)
+        cfg.update(imtop1_train=2000, lvtop_train=2000)
         cfg.update(weights_add_nbatches=False)
+        cfg.update(bbone_bn_freeze=False)
         return cfg
 
     def config_torchvision(self, cfg):
@@ -233,6 +232,7 @@ class FasterRCNN(nn.Module):
         cfg = self.config_resnet(cfg) if arch == 'resnet50' else self.config_mobile(cfg)
         if src == 'tv' and (arch == 'resnet50' and version == 'v1' or arch == 'mobilenetv3l'):
             cfg.update(weights_add_nbatches=True)
+            cfg.update(bbone_bn_freeze=True)
         if src == 'tv' and arch == 'resnet50' and version == 'v1':
             cfg.update(resnet_bn_eps=0.0)
         if src == 'tv' and arch == 'resnet50' and version == 'v2':
@@ -245,7 +245,9 @@ class FasterRCNN(nn.Module):
 
     def get_backbone(self, cfg):
         if cfg['bbone'] == 'resnet50':
-            return ResNet50(bn_eps=cfg['resnet_bn_eps'])
+            bn_eps = cfg['resnet_bn_eps']
+            bn = bn_eps if not cfg['bbone_bn_freeze'] else (bn_eps, 'frozen')
+            return ResNet50(bn=bn, num_freeze=2)
         if cfg['bbone'] == 'mobilenetv3l':
             return MobileNetV3L([13, 16], bn=(1e-05, 'frozen'), num_freeze=7)
 

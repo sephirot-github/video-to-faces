@@ -12,11 +12,12 @@ class ConvUnit(nn.Module):
         
         if bn == None:
             self.bn = None
-        elif isinstance(bn, tuple) and bn[1] == 'frozen':
-            self.bn = nn.BatchNorm2d(cout, eps=bn[0])
-            self.bn.training = False
-        else:
+        elif isinstance(bn, float):
             self.bn = nn.BatchNorm2d(cout, eps=bn)
+        else:
+            self.bn = nn.BatchNorm2d(cout, eps=bn[0])
+            if bn[1] == 'frozen':
+                self.bn.training = False
 
         if activ == None:
             self.activ = None
@@ -32,10 +33,12 @@ class ConvUnit(nn.Module):
         elif activ == 'hardswish':
             self.activ = nn.Hardswish()
 
-    def forward(self, x):
+    def forward(self, x, add=None):
         x = self.conv(x)
         if self.bn:
             x = self.bn(x)
+        if add is not None:
+            x = x + add
         if self.activ:
             x = self.activ(x)
         return x
@@ -52,6 +55,11 @@ class BaseMultiReturn(nn.Module):
         super().__init__()
         self.retidx = retidx
     
+    def freeze(self, count):
+        for layer in self.layers[:count]:
+            for p in layer.parameters():
+                p.requires_grad_(False)
+
     def forward(self, x):
         if not self.retidx:
             return self.layers(x)

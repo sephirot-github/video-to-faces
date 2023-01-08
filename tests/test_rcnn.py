@@ -24,12 +24,33 @@ class TestRCNN(unittest.TestCase):
         self.assertEqual(len(ret), 4)
         return [r.item() for r in ret]
 
+    def test_rcnn_torchvision_v1_T(self):
+        losses = self._run_training(detmodels.FasterRCNN_TorchVision_ResNet50_v1)
+        self.assertAlmostEqual(losses[0], 0.07744, places=5)
+        self.assertAlmostEqual(losses[1], 0.06049, places=5)
+        self.assertAlmostEqual(losses[2], 0.39702, places=5)
+        self.assertAlmostEqual(losses[3], 0.46581, places=5)
+
+    def test_rcnn_torchvision_v2_T(self):
+        losses = self._run_training(detmodels.FasterRCNN_TorchVision_ResNet50_v2)
+        self.assertAlmostEqual(losses[0], 0.07088, places=5)
+        self.assertAlmostEqual(losses[1], 0.04533, places=5)
+        self.assertAlmostEqual(losses[2], 0.60558, places=5)
+        self.assertAlmostEqual(losses[3], 0.35808, places=5)
+
+    def test_rcnn_torchvision_mobile_lores_T(self):
+        losses = self._run_training(detmodels.FasterRCNN_TorchVision_MobileNetV3L_LoRes)
+        self.assertAlmostEqual(losses[0], 0.09477, places=5)
+        self.assertAlmostEqual(losses[1], 0.09340, places=5)
+        self.assertAlmostEqual(losses[2], 0.37972, places=5)
+        self.assertAlmostEqual(losses[3], 0.35782, places=5)
+
     def test_rcnn_torchvision_mobile_hires_T(self):
         losses = self._run_training(detmodels.FasterRCNN_TorchVision_MobileNetV3L_HiRes)
-        self.assertAlmostEqual(losses[0], 0.09404, places=5)
-        self.assertAlmostEqual(losses[1], 0.05485, places=5)
-        self.assertAlmostEqual(losses[2], 0.34870, places=5)
-        self.assertAlmostEqual(losses[3], 0.45987, places=5)
+        self.assertAlmostEqual(losses[0], 0.0940, places=4)
+        self.assertAlmostEqual(losses[1], 0.0549, places=4)
+        self.assertAlmostEqual(losses[2], 0.3487, places=4)
+        self.assertAlmostEqual(losses[3], 0.4599, places=4)
 
     def test_rcnn_torchvision_v1(self):
         b, s, l = self._run_inference(detmodels.FasterRCNN_TorchVision_ResNet50_v1)

@@ -142,6 +142,4 @@ class MobileNetV3L(BaseMultiReturn):
             ConvUnit(out, 6*out, 1, 1, 0, 'hardswish', bn)
         )
         if num_freeze:
-            for layer in self.layers[:num_freeze]:
-                for p in layer.parameters():
-                    p.requires_grad_(False)
+            super().freeze(num_freeze)
