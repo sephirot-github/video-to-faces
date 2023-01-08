@@ -176,7 +176,7 @@ class RetinaNet_TorchVision(nn.Module):
 
     def __init__(self, pretrained=True, device='cpu'):
         super().__init__()
-        backbone = ResNet50(retidx=[2, 3, 4], bn=0.0)
+        backbone = ResNet50(retidx=[2, 3, 4], bn=(0.0, 'frozen'), num_freeze=2)
         cins = [512, 1024, 2048]
         cout = 256
         strides = [8, 16, 32, 64, 128]
@@ -193,23 +193,27 @@ class RetinaNet_TorchVision(nn.Module):
         if pretrained:
             load_weights(self, self.link, 'resnet50_coco', device, add_num_batches=True)
     
-    def forward(self, imgs):
+    def forward(self, imgs, targets=None):
         dv = next(self.parameters()).device
         x, sz_orig, sz_used = preprocess(imgs, dv, (800, 1333), 'torch')
-        
+        priors = get_priors(x.shape[2:], self.bases, dv, 'corner', 'fit')
+
         xs = self.body(x)
         xs = self.fpn(xs)
         reg = [self.reg_head(lvl) for lvl in xs]
         log = [self.cls_head(lvl) for lvl in xs]
-        reg = torch.cat(reg, axis=1)
-        scr = torch.cat(log, axis=1).sigmoid_()
-        
         lvlen = [lvl.shape[1] for lvl in log]
-        priors = get_priors(x.shape[2:], self.bases, dv, 'corner', 'fit')
-        b, s, c = self.postprocess(reg, scr, priors, lvlen, sz_used)
-        b = scale_boxes(b, sz_orig, sz_used)
-        b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
-        return b, s, c
+        reg = torch.cat(reg, axis=1)
+        log = torch.cat(log, axis=1)
+        
+        if self.training:
+            return 1
+        else:
+            scr = log.sigmoid_()
+            b, s, c = self.postprocess(reg, scr, priors, lvlen, sz_used)
+            b = scale_boxes(b, sz_orig, sz_used)
+            b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
+            return b, s, c
 
     def postprocess(self, reg, scr, priors, lvlen, sz_used):
         n, dim, num_classes = scr.shape

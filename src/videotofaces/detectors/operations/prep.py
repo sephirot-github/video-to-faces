@@ -4,6 +4,8 @@ import cv2
 import torch
 import torch.nn.functional as F
 
+from .bbox import scale_boxes
+
 # source: https://github.com/pytorch/vision/blob/main/torchvision/models/detection/transform.py
 
 
@@ -89,3 +91,10 @@ def pad_and_batch(ts, mult):
     for i in range(len(ts)):
         x[i, :, :ts[i].shape[1], :ts[i].shape[2]].copy_(ts[i])
     return x
+
+
+def prep_targets(targets, sz_used, sz_orig):
+    gtlabels = [torch.tensor(t) for t in targets[1]]
+    gtboxes = [torch.tensor(t) for t in targets[0]]
+    gtboxes = scale_boxes(gtboxes, sz_used, sz_orig)
+    return gtboxes, gtlabels

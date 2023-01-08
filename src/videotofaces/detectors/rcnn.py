@@ -11,7 +11,7 @@ from .operations.anchor import get_priors, make_anchors
 from .operations.bbox import clamp_to_canvas, convert_to_cwh, decode_boxes, remove_small, scale_boxes
 from .operations.loss import get_losses, match_with_targets
 from .operations.post import get_lvidx, roi_align_multilevel
-from .operations.prep import preprocess
+from .operations.prep import preprocess, prep_targets
 from ..utils.weights import load_weights
 
 
@@ -41,7 +41,7 @@ class RegionProposalNetwork(nn.Module):
             res.append((boxes, log, log.shape[1]))
         return map(list, zip(*res))
 
-    def forward(self, fmaps, priors, imsizes, cfg, gtboxes):
+    def forward(self, fmaps, priors, imsizes, cfg, gtboxes=None):
         lvtop = cfg['lvtop'] if not self.training else cfg['lvtop_train']
         imtop = cfg['imtop1'] if not self.training else cfg['imtop1_train']
 
@@ -68,12 +68,13 @@ class RegionProposalNetwork(nn.Module):
         boxes, imidx = boxes[keep], imidx[keep]
         
         if not self.training:
-            return boxes, imidx, None
+            return boxes, imidx
         else:
             regs = torch.cat(regs, axis=1)
             logs = torch.cat(logs, axis=1)
             priors = torch.cat(priors)
-            loss_obj, loss_reg = get_losses(gtboxes, priors, regs, logs, 0.3, 0.7, True, 256, 0.5)
+            loss_obj, loss_reg = get_losses(gtboxes, priors, regs, logs, matcher=(0.3, 0.7, True),
+                                            sampler=(256, 0.5), types=('ce', 'l1s'))
             return boxes, imidx, (loss_obj, loss_reg)
 
 
@@ -101,7 +102,7 @@ class RoIProcessingNetwork(nn.Module):
         b = self.cls(x)
         return a, b
     
-    def forward(self, proposals, imidx, fmaps, fmaps_strides, imsizes, cfg, gtb, gtl):
+    def forward(self, proposals, imidx, fmaps, fmaps_strides, imsizes, cfg, gtb=None, gtl=None):
         if self.training:
             # to list
             proposals = [proposals[imidx == i] for i in range(len(gtb))]
@@ -272,18 +273,17 @@ class FasterRCNN(nn.Module):
         strides = self.cfg['strides']
         
         x, sz_orig, sz_used = preprocess(imgs, dv, resize, resize_with)
-        gtb = None if not self.training else scale_boxes([torch.tensor(t) for t in targets[0]], sz_used, sz_orig)
-        gtl = None if not self.training else [torch.tensor(t) for t in targets[1]]
         priors = get_priors(x.shape[2:], self.bases, dv, 'corner', priors_patches, concat=False)
         xs = self.body(x)
         xs = self.fpn(xs)
-        p, imidx, p_losses = self.rpn(xs, priors, sz_used, self.cfg, gtb)
-        ret = self.roi(p, imidx, xs[:-1], strides[:-1], sz_used, self.cfg, gtb, gtl)
         if self.training:
-            d_losses = ret
+            gtb, gtl = prep_targets(targets, sz_used, sz_orig)
+            p, imidx, p_losses = self.rpn(xs, priors, sz_used, self.cfg, gtb)
+            d_losses = self.roi(p, imidx, xs[:-1], strides[:-1], sz_used, self.cfg, gtb, gtl)
             return (*p_losses, *d_losses)
         else:
-            b, s, c = ret
+            p, imidx = self.rpn(xs, priors, sz_used, self.cfg)
+            b, s, c = self.roi(p, imidx, xs[:-1], strides[:-1], sz_used, self.cfg)
             b = scale_boxes(b, sz_orig, sz_used)
             b, s, c = [[t.detach().cpu().numpy() for t in tl] for tl in [b, s, c]]
             return b, s, c
