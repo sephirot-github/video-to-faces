@@ -73,7 +73,7 @@ class RegionProposalNetwork(nn.Module):
             regs = torch.cat(regs, axis=1)
             logs = torch.cat(logs, axis=1)
             priors = torch.cat(priors)
-            loss_obj, loss_reg = get_losses(gtboxes, priors, regs, logs, matcher=(0.3, 0.7, True),
+            loss_obj, loss_reg = get_losses(gtboxes, None, priors, regs, logs, matcher=(0.3, 0.7, True),
                                             sampler=(256, 0.5), types=('ce', 'l1s'))
             return boxes, imidx, (loss_obj, loss_reg)
 
@@ -108,7 +108,7 @@ class RoIProcessingNetwork(nn.Module):
             proposals = [proposals[imidx == i] for i in range(len(gtb))]
             proposals = [torch.cat([p, b.to(torch.float32)]) for p, b in zip(proposals, gtb)]
             # main
-            targets, labels, sidx, _ = match_with_targets(gtb, gtl, proposals, 0.5, 0.5, False, 512, 0.25)
+            targets, labels, sidx = match_with_targets(gtb, gtl, proposals, 0.5, 0.5, False, 512, 0.25)
             proposals = [p[sampled] for p, sampled in zip(proposals, sidx)]
             # back to joined
             imidx = [torch.full([len(p)], i) for i, p in enumerate(proposals)]
