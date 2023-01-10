@@ -1,3 +1,5 @@
+from functools import partial
+
 import torch
 import torch.nn.functional as F
 from torchvision.ops import sigmoid_focal_loss
@@ -65,7 +67,50 @@ def get_matched_labels(gtlabels, gtidxs, sidx_all):
     return labels
 
 
-def get_losses(gtboxes, gtlabels, priors, regs, logs, matcher, sampler, types):
+loss_funcs = {
+    'ce_bin': F.binary_cross_entropy_with_logits,
+    'ce': F.cross_entropy,
+    'focal': sigmoid_focal_loss,
+    'l1': F.l1_loss,
+    'l1_s': partial(F.smooth_l1_loss, beta=1/9)
+}
+
+
+def calc_losses(types, logs, regs, labels, targets, avg_mode='total', avg_divs='usual'):
+    assert avg_mode in ['total', 'per_image']
+    assert avg_divs in ['usual', 'always_pos', 'always_all']
+    cls_func = loss_funcs[types[0]]
+    reg_func = loss_funcs[types[1]]
+    
+    if types[0] == 'ce_bin':
+        labels = [l.to(logs[0].dtype) for l in labels]
+    if types[0] == 'focal':
+        for i in range(len(labels)):
+            li = labels[i]
+            new = torch.zeros((li.shape[0], 91), dtype=torch.float32)
+            new[li > 0, li[li > 0]] = 1.0
+            labels[i] = new
+
+    if avg_mode == 'total':
+        logs, regs, labels, targets = [torch.cat(x) for x in [logs, regs, labels, targets]]
+        div1 = labels.shape[0] if avg_divs != 'always_pos' else targets.shape[0]
+        div2 = targets.shape[0] if avg_divs != 'always_all' else labels.shape[0]
+        cls_loss = cls_func(logs, labels, reduction='sum') / div1
+        reg_loss = reg_func(regs, targets, reduction='sum') / div2
+    else:
+        cls_loss, reg_loss = [], []
+        n = len(logs)
+        for i in range(n):
+            div1 = labels[i].shape[0] if avg_divs != 'always_pos' else targets[i].shape[0]
+            div2 = targets[i].shape[0] if avg_divs != 'always_all' else labels[i].shape[0]
+            cls_loss.append(cls_func(logs[i], labels[i], reduction='sum') / div1)
+            reg_loss.append(reg_func(regs[i], targets[i], reduction='sum') / div2)
+        cls_loss = sum(cls_loss) / n
+        reg_loss = sum(reg_loss) / n
+    return cls_loss, reg_loss
+
+
+def get_losses(gtboxes, gtlabels, priors, regs, logs, matcher, sampler, types, avg_mode='total', avg_divs='usual'):
     """"""
     gtidxs = assign(gtboxes, convert_to_xyxy(priors), *matcher)
     if sampler is not None:
@@ -76,15 +121,12 @@ def get_losses(gtboxes, gtlabels, priors, regs, logs, matcher, sampler, types):
     
     targets = get_matched_targets(gtboxes, priors, gtidxs, sidx_pos)
     labels = get_matched_labels(gtlabels, gtidxs, sidx_all)
-
+    
     n = len(gtboxes)
-    logs = torch.cat([logs[i][sidx_all[i]].squeeze() for i in range(n)])
-    regs = torch.cat([regs[i][sidx_pos[i]] for i in range(n)])
-    labels = torch.cat([lb.to(torch.float32) for lb in labels])
-    targets = torch.cat(targets)
-    loss_obj = F.binary_cross_entropy_with_logits(logs, labels)
-    loss_reg = F.smooth_l1_loss(regs, targets, beta=1/9, reduction='sum') / (labels.numel())
-    return loss_obj, loss_reg
+    logs = [logs[i][sidx_all[i]].squeeze() for i in range(n)]
+    regs = [regs[i][sidx_pos[i]] for i in range(n)]
+    res = calc_losses(types, logs, regs, labels, targets, avg_mode, avg_divs)
+    return res
 
 
 def match_with_targets(gtboxes, gtlabels, proposals, bg_iou, fg_iou, match_lq, batch, pos_ratio):

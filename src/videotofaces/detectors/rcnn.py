@@ -74,7 +74,7 @@ class RegionProposalNetwork(nn.Module):
             logs = torch.cat(logs, axis=1)
             priors = torch.cat(priors)
             loss_obj, loss_reg = get_losses(gtboxes, None, priors, regs, logs, matcher=(0.3, 0.7, True),
-                                            sampler=(256, 0.5), types=('ce', 'l1s'))
+                                            sampler=(256, 0.5), types=('ce_bin', 'l1_s'), avg_divs='always_all')
             return boxes, imidx, (loss_obj, loss_reg)
 
 

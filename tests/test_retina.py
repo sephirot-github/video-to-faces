@@ -4,24 +4,35 @@ import unittest
 import cv2
 import numpy as np
 
+from common import get_input_coco
 from videotofaces import Detector, detmodels
 
 
 class TestRetina(unittest.TestCase):
 
-    def test_retinanet_torchvision(self):
-        model = Detector(detmodels.RetinaNet)
-        testdir = osp.dirname(osp.realpath(__file__))
-        im1 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_000139.jpg'))
-        im2 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_455157.jpg'))
-        b, s, l = model([im1, im2])
-        self.assertEqual(len(b), 2)
-        self.assertEqual(len(s), 2)
-        self.assertEqual(len(l), 2)
-        self.assertEqual(b[0].shape, (241, 4))
-        self.assertEqual(s[0].shape, (241,))
-        self.assertEqual(b[1].shape, (289, 4))
-        self.assertEqual(l[1].shape, (289,))
+    def _run_inference(self, detmodels_val):
+        model = Detector(detmodels_val)
+        imgs = get_input_coco()
+        b, s, l = model(imgs)
+        self.assertEqual((len(b), len(s), len(l)), (2, 2, 2))
+        return b, s, l
+
+    def _run_training(self, detmodels_val):
+        model = Detector(detmodels_val, train=True)
+        imgs, targ = get_input_coco(True)
+        ret = model(imgs, targ)
+        self.assertEqual(len(ret), 2)
+        return [r.item() for r in ret]
+
+    def test_retinanet_tv_T(self):
+        losses = self._run_training(detmodels.RetinaNet)
+        self.assertAlmostEqual(losses[0], 0.34684, places=5)
+        self.assertAlmostEqual(losses[1], 0.32876, places=5)
+
+    def test_retinanet_tv(self):
+        b, s, l = self._run_inference(detmodels.RetinaNet)
+        self.assertEqual((b[0].shape, s[0].shape), ((241, 4), (241,)))
+        self.assertEqual((b[1].shape, l[1].shape), ((289, 4), (289,)))
         np.testing.assert_almost_equal(b[0][100], np.array([355.996, 214.633, 381.615, 289.376]), decimal=3)
         np.testing.assert_almost_equal(b[0][200], np.array([316.892, 223.678, 359.765, 310.691]), decimal=3)
         np.testing.assert_almost_equal(b[1][4], np.array([524.262, 271.283, 640.000, 486.419]), decimal=3)

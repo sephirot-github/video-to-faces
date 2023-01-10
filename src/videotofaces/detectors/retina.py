@@ -9,8 +9,9 @@ from ..backbones.resnet import ResNet50, ResNet152
 from .components.fpn import FeaturePyramidNetwork
 from .operations.anchor import get_priors, make_anchors
 from .operations.bbox import clamp_to_canvas, decode_boxes, scale_boxes
+from .operations.loss import get_losses
 from .operations.post import get_results, top_per_level
-from .operations.prep import preprocess, to_tensors
+from .operations.prep import prep_targets, preprocess, to_tensors
 from ..utils.weights import load_weights
 
 # Source 1: https://github.com/biubug6/Pytorch_Retinaface
@@ -176,7 +177,7 @@ class RetinaNet_TorchVision(nn.Module):
 
     def __init__(self, pretrained=True, device='cpu'):
         super().__init__()
-        backbone = ResNet50(retidx=[2, 3, 4], bn=(0.0, 'frozen'), num_freeze=2)
+        backbone = ResNet50(retidx=[2, 3, 4], bn=(0.0, 'frozen'), num_freeze=5)
         cins = [512, 1024, 2048]
         cout = 256
         strides = [8, 16, 32, 64, 128]
@@ -207,7 +208,8 @@ class RetinaNet_TorchVision(nn.Module):
         log = torch.cat(log, axis=1)
         
         if self.training:
-            return 1
+            gtb, gtl = prep_targets(targets, sz_used, sz_orig)
+            return get_losses(gtb, gtl, priors, reg, log, (0.4, 0.5, True), None, ('focal', 'l1'), 'per_image', 'always_pos')
         else:
             scr = log.sigmoid_()
             b, s, c = self.postprocess(reg, scr, priors, lvlen, sz_used)
