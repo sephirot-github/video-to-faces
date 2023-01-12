@@ -4,33 +4,20 @@ import unittest
 import cv2
 import numpy as np
 
-from common import get_input_coco
-from videotofaces import Detector, detmodels
+from common import run_training_coco, run_inference_coco, run_inference_wider
+from videotofaces import detmodels
 
 
 class TestRetina(unittest.TestCase):
 
-    def _run_inference(self, detmodels_val):
-        model = Detector(detmodels_val)
-        imgs = get_input_coco()
-        b, s, l = model(imgs)
-        self.assertEqual((len(b), len(s), len(l)), (2, 2, 2))
-        return b, s, l
-
-    def _run_training(self, detmodels_val):
-        model = Detector(detmodels_val, train=True)
-        imgs, targ = get_input_coco(True)
-        ret = model(imgs, targ)
-        self.assertEqual(len(ret), 2)
-        return [r.item() for r in ret]
-
     def test_retinanet_tv_T(self):
-        losses = self._run_training(detmodels.RetinaNet)
+        losses = run_training_coco(detmodels.RetinaNet)
+        self.assertEqual(len(losses), 2)
         self.assertAlmostEqual(losses[0], 0.34684, places=5)
         self.assertAlmostEqual(losses[1], 0.32876, places=5)
 
     def test_retinanet_tv(self):
-        b, s, l = self._run_inference(detmodels.RetinaNet)
+        b, s, l = run_inference_coco(self, detmodels.RetinaNet)
         self.assertEqual((b[0].shape, s[0].shape), ((241, 4), (241,)))
         self.assertEqual((b[1].shape, l[1].shape), ((289, 4), (289,)))
         np.testing.assert_almost_equal(b[0][100], np.array([355.996, 214.633, 381.615, 289.376]), decimal=3)
@@ -42,19 +29,9 @@ class TestRetina(unittest.TestCase):
         np.testing.assert_equal(l[0][130:140], np.array([86, 63, 77, 67, 62, 1, 62, 67, 62, 76]))
         np.testing.assert_equal(l[1][10:25], np.array([67, 67, 15, 1, 15, 15, 67, 67, 67, 1, 28, 27, 84, 67, 67]))
 
-    # from WIDER_val:
-    # irl_det_1 = "12_Group_Group_12_Group_Group_12_10.jpg"
-    # irl_det_2 = "12_Group_Group_12_Group_Group_12_29.jpg"
-    # irl_det_3 = "2_Demonstration_Demonstration_Or_Protest_2_58.jpg"
-    # irl_det_4 = "17_Ceremony_Ceremony_17_171.jpg"
-
     def test_mobilenet(self):
-        model = Detector(detmodels.RetinaFace_Biubug6_MobileNet)
-        testdir = osp.dirname(osp.realpath(__file__))
-        imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [1, 2, 3, 4]]
-        b, s = model(imgs)
+        b, s = run_inference_wider(self, detmodels.RetinaFace_Biubug6_MobileNet)
         rb = [np.hstack([b[i], s[i][:, None]]) for i in range(len(b))]
-        self.assertEqual(len(rb), 4)
         self.assertEqual(rb[0].shape, (24, 5))
         self.assertEqual(rb[1].shape, (20, 5))
         self.assertEqual(rb[2].shape, (358, 5))
@@ -69,22 +46,15 @@ class TestRetina(unittest.TestCase):
         np.testing.assert_almost_equal(rb[3][-5], np.array([621.6558, 4.7005, 637.6158, 27.7780, 0.0208]), decimal=4)
 
     def test_resnet50_A(self):
-        model = Detector(detmodels.RetinaFace_Biubug6_ResNet50)
-        testdir = osp.dirname(osp.realpath(__file__))
-        imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [1, 2]]
-        b, s = model(imgs)
+        b, s = run_inference_wider(self, detmodels.RetinaFace_Biubug6_ResNet50, [1, 2])
         rb = [np.hstack([b[i], s[i][:, None]]) for i in range(len(b))]
-        self.assertEqual(len(rb), 2)
         self.assertEqual(rb[0].shape, (14, 5))
         self.assertEqual(rb[1].shape, (9, 5))
         np.testing.assert_almost_equal(rb[0][5], np.array([290.9456, 339.1132, 352.7952, 420.90085, 0.99942017]), decimal=4)
         np.testing.assert_almost_equal(rb[1][1], np.array([81.9536, 199.9863, 172.0615, 331.8756, 0.99976426]), decimal=4)
 
     def test_resnet50_B(self):
-        model = Detector(detmodels.RetinaFace_BBT_ResNet50_Mixed)
-        testdir = osp.dirname(osp.realpath(__file__))
-        imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [3, 4]]
-        b, s = model(imgs)
+        b, s = run_inference_wider(self, detmodels.RetinaFace_BBT_ResNet50_Mixed, [3, 4])
         rb = [np.hstack([b[i], s[i][:, None]]) for i in range(len(b))]
         self.assertEqual(rb[0].shape, (43, 5))
         self.assertEqual(rb[1].shape, (27, 5)) 
@@ -92,10 +62,7 @@ class TestRetina(unittest.TestCase):
         np.testing.assert_almost_equal(rb[1][6], np.array([398.3162, 309.1897, 479.2617, 406.1430, 0.8273]), decimal=4)
 
     def test_resnet152(self):
-        model = Detector(detmodels.RetinaFace_BBT_ResNet152_Mixed)
-        testdir = osp.dirname(osp.realpath(__file__))
-        imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in [3, 4]]
-        b, s = model(imgs)
+        b, s = run_inference_wider(self, detmodels.RetinaFace_BBT_ResNet152_Mixed, [3, 4])
         rb = [np.hstack([b[i], s[i][:, None]]) for i in range(len(b))]
         self.assertEqual(rb[0].shape, (43, 5))
         self.assertEqual(rb[1].shape, (26, 5))

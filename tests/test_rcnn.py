@@ -3,61 +3,50 @@ import unittest
 
 import cv2
 import numpy as np
+import torch
 
-from common import get_input_coco
-from videotofaces import Detector, detmodels
+from common import run_training_coco, run_inference_coco, run_inference_anime
+from videotofaces import detmodels
 
 
 class TestRCNN(unittest.TestCase):
 
-    def _run_inference(self, detmodels_val):
-        model = Detector(detmodels_val)
-        imgs = get_input_coco()
-        b, s, l = model(imgs)
-        self.assertEqual((len(b), len(s), len(l)), (2, 2, 2))
-        return b, s, l
-
-    def _run_training(self, detmodels_val):
-        model = Detector(detmodels_val, train=True)
-        imgs, targ = get_input_coco(True)
-        ret = model(imgs, targ, seed=0)
-        self.assertEqual(len(ret), 4)
-        return [r.item() for r in ret]
-
     def test_rcnn_torchvision_v1_T(self):
-        losses = self._run_training(detmodels.FasterRCNN_TorchVision_ResNet50_v1)
+        losses = run_training_coco(detmodels.FasterRCNN_TorchVision_ResNet50_v1, seed=0)
+        self.assertEqual(len(losses), 4)
         self.assertAlmostEqual(losses[0], 0.07744, places=5)
         self.assertAlmostEqual(losses[1], 0.06049, places=5)
         self.assertAlmostEqual(losses[2], 0.39702, places=5)
         self.assertAlmostEqual(losses[3], 0.46581, places=5)
 
     def test_rcnn_torchvision_v2_T(self):
-        losses = self._run_training(detmodels.FasterRCNN_TorchVision_ResNet50_v2)
+        losses = run_training_coco(detmodels.FasterRCNN_TorchVision_ResNet50_v2, seed=0)
+        self.assertEqual(len(losses), 4)
         self.assertAlmostEqual(losses[0], 0.07088, places=5)
         self.assertAlmostEqual(losses[1], 0.04533, places=5)
         self.assertAlmostEqual(losses[2], 0.60558, places=5)
         self.assertAlmostEqual(losses[3], 0.35808, places=5)
 
     def test_rcnn_torchvision_mobile_lores_T(self):
-        losses = self._run_training(detmodels.FasterRCNN_TorchVision_MobileNetV3L_LoRes)
+        losses = run_training_coco(detmodels.FasterRCNN_TorchVision_MobileNetV3L_LoRes, seed=0)
+        self.assertEqual(len(losses), 4)
         self.assertAlmostEqual(losses[0], 0.09477, places=5)
         self.assertAlmostEqual(losses[1], 0.09340, places=5)
         self.assertAlmostEqual(losses[2], 0.37972, places=5)
         self.assertAlmostEqual(losses[3], 0.35782, places=5)
 
     def test_rcnn_torchvision_mobile_hires_T(self):
-        losses = self._run_training(detmodels.FasterRCNN_TorchVision_MobileNetV3L_HiRes)
+        losses = run_training_coco(detmodels.FasterRCNN_TorchVision_MobileNetV3L_HiRes, seed=0)
+        self.assertEqual(len(losses), 4)
         self.assertAlmostEqual(losses[0], 0.0940, places=4)
         self.assertAlmostEqual(losses[1], 0.0549, places=4)
         self.assertAlmostEqual(losses[2], 0.3487, places=4)
         self.assertAlmostEqual(losses[3], 0.4599, places=4)
 
     def test_rcnn_torchvision_v1(self):
-        b, s, l = self._run_inference(detmodels.FasterRCNN_TorchVision_ResNet50_v1)
-        self.assertEqual(b[0].shape, (88, 4))
-        self.assertEqual(s[0].shape, (88,))
-        self.assertEqual(b[1].shape, (42, 4))
-        self.assertEqual(l[1].shape, (42,))
+        b, s, l = run_inference_coco(self, detmodels.FasterRCNN_TorchVision_ResNet50_v1)
+        self.assertEqual((b[0].shape, s[0].shape), ((88, 4), (88,)))
+        self.assertEqual((b[1].shape, l[1].shape), ((42, 4), (42,)))
         np.testing.assert_almost_equal(b[0][10], np.array([334.253, 178.055, 368.729, 225.988]), decimal=3)
         np.testing.assert_almost_equal(b[0][50], np.array([300.852, 213.452, 353.634, 220.782]), decimal=3)
         np.testing.assert_almost_equal(b[1][4], np.array([93.350, 309.727, 475.038, 543.760]), decimal=3)
@@ -68,11 +57,9 @@ class TestRCNN(unittest.TestCase):
         np.testing.assert_equal(l[1][10:25], np.array([67, 1, 1, 67, 15, 27, 77, 15, 32, 15, 15, 67, 67, 67, 15]))
 
     def test_rcnn_torchvision_v2(self):
-        b, s, l = self._run_inference(detmodels.FasterRCNN_TorchVision_ResNet50_v2)
-        self.assertEqual(b[0].shape, (75, 4))
-        self.assertEqual(s[0].shape, (75,))
-        self.assertEqual(b[1].shape, (46, 4))
-        self.assertEqual(l[1].shape, (46,))
+        b, s, l = run_inference_coco(self, detmodels.FasterRCNN_TorchVision_ResNet50_v2)
+        self.assertEqual((b[0].shape, s[0].shape), ((75, 4), (75,)))
+        self.assertEqual((b[1].shape, l[1].shape), ((46, 4), (46,)))
         np.testing.assert_almost_equal(b[0][20], np.array([352.610, 205.653, 361.419, 219.859]), decimal=3)
         np.testing.assert_almost_equal(b[0][60], np.array([143.423, 276.501, 181.135, 286.915]), decimal=3)
         np.testing.assert_almost_equal(b[1][1], np.array([183.487, 367.362, 465.613, 558.607]), decimal=3)
@@ -83,11 +70,9 @@ class TestRCNN(unittest.TestCase):
         np.testing.assert_equal(l[1][-15:], np.array([15, 73, 18, 67, 84, 31, 15, 15, 15, 15, 2, 15, 1, 15, 84]))
 
     def test_rcnn_torchvision_mobile_hires(self):
-        b, s, l = self._run_inference(detmodels.FasterRCNN_TorchVision_MobileNetV3L_HiRes)
-        self.assertEqual(b[0].shape, (80, 4))
-        self.assertEqual(s[0].shape, (80,))
-        self.assertEqual(b[1].shape, (57, 4))
-        self.assertEqual(l[1].shape, (57,))
+        b, s, l = run_inference_coco(self, detmodels.FasterRCNN_TorchVision_MobileNetV3L_HiRes)
+        self.assertEqual((b[0].shape, s[0].shape), ((80, 4), (80,)))
+        self.assertEqual((b[1].shape, l[1].shape), ((57, 4), (57,)))
         np.testing.assert_almost_equal(b[0][24], np.array([489.39, 170.88, 518.76, 282.54]), decimal=2)
         np.testing.assert_almost_equal(b[0][70], np.array([578.38, 250.50, 604.59, 266.73]), decimal=2)
         np.testing.assert_almost_equal(b[1][5], np.array([298.91, 275.88, 592.31, 512.61]), decimal=2)
@@ -98,18 +83,16 @@ class TestRCNN(unittest.TestCase):
         np.testing.assert_equal(l[1][:15], np.array([28, 1, 15, 1, 15, 67, 1, 15, 67, 62, 1, 15, 28, 27, 15]))
 
     def test_rcnn_torchvision_mobile_lores(self):
-        b, s, l = self._run_inference(detmodels.FasterRCNN_TorchVision_MobileNetV3L_LoRes)
-        self.assertEqual(b[0].shape, (32, 4))
-        self.assertEqual(s[0].shape, (32,))
-        self.assertEqual(b[1].shape, (15, 4))
-        self.assertEqual(l[1].shape, (15,))
+        b, s, l = run_inference_coco(self, detmodels.FasterRCNN_TorchVision_MobileNetV3L_LoRes)
+        self.assertEqual((b[0].shape, s[0].shape), ((32, 4), (32,)))
+        self.assertEqual((b[1].shape, l[1].shape), ((15, 4), (15,)))
         np.testing.assert_almost_equal(b[0][5], np.array([544.0790, 299.3280, 594.0629, 397.1502]), decimal=4)
         np.testing.assert_almost_equal(b[1][0], np.array([213.9087, 131.7052, 448.1617, 298.2360]), decimal=4)
         np.testing.assert_almost_equal(s[0][17:22], np.array([0.1037, 0.1011, 0.0793, 0.0790, 0.0786]), decimal=4)
         np.testing.assert_equal(l[1], np.array([28, 1, 15, 1, 27, 15, 27, 67, 31, 33, 15, 31, 62, 31, 1]))
 
     def test_rcnn_mmdet_resnet50(self):
-        b, s, l = self._run_inference(detmodels.FasterRCNN_MMDet_ResNet50)
+        b, s, l = run_inference_coco(self, detmodels.FasterRCNN_MMDet_ResNet50)
         self.assertEqual((b[0].shape, s[0].shape), ((82, 4), (82,)))
         self.assertEqual((b[1].shape, l[1].shape), ((40, 4), (40,)))
         np.testing.assert_almost_equal(b[0][25], np.array([382.1297, 215.6923, 421.2562, 222.4981]), decimal=4)
@@ -122,11 +105,7 @@ class TestRCNN(unittest.TestCase):
         np.testing.assert_equal(l[1][14:29], np.array([13, 13, 67, 24, 13, 60, 60, 60, 0, 26, 13, 0, 26, 60, 13]))
 
     def test_rcnn_mmdet_resnet50_animefaces(self):
-        model = Detector(detmodels.FasterRCNN_MMDet_ResNet50_AnimeFaces)
-        testdir = osp.dirname(osp.realpath(__file__))
-        imgs = [cv2.imread(osp.join(testdir, 'images', 'anime_det_%u.jpg' % i)) for i in [1, 2, 3, 4]]
-        b, s, _ = model(imgs)
-        self.assertEqual((len(b), len(s)), (4, 4))
+        b, s = run_inference_anime(self, detmodels.FasterRCNN_MMDet_ResNet50_AnimeFaces)
         self.assertEqual((b[0].shape, s[0].shape), ((14, 4), (14,)))
         self.assertEqual((b[1].shape, s[1].shape), ((64, 4), (64,)))
         self.assertEqual((b[2].shape, s[2].shape), ((6, 4), (6,)))

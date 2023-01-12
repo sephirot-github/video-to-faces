@@ -2,9 +2,53 @@ import os.path as osp
 
 import cv2
 import numpy as np
+import torch
+
+from videotofaces import Detector
 
 
-def get_input_coco(with_targets=False):
+def run_training_coco(detmodels_val, seed=None):
+    model = Detector(detmodels_val, train=True)
+    imgs, targ = _get_input_coco(True)
+    # since we're only checking loss values and not backproping,
+    # we can disable gradients to save up on memory usage
+    with torch.no_grad():
+        ret = model(imgs, targ, seed=seed)
+    return [r.item() for r in ret]
+
+
+def run_inference_coco(test_class, detmodels_val):
+    model = Detector(detmodels_val)
+    imgs = _get_input_coco()
+    b, s, l = model(imgs)
+    test_class.assertEqual((len(b), len(s), len(l)), (2, 2, 2))
+    return b, s, l
+
+
+def run_inference_wider(test_class, detmodels_val, imidx=[1, 2, 3, 4]):
+    # from WIDER_val:
+    # irl_det_1 = "12_Group_Group_12_Group_Group_12_10.jpg"
+    # irl_det_2 = "12_Group_Group_12_Group_Group_12_29.jpg"
+    # irl_det_3 = "2_Demonstration_Demonstration_Or_Protest_2_58.jpg"
+    # irl_det_4 = "17_Ceremony_Ceremony_17_171.jpg"
+    model = Detector(detmodels_val)
+    testdir = osp.dirname(osp.realpath(__file__))
+    imgs = [cv2.imread(osp.join(testdir, 'images', 'irl_det_%u.jpg' % i)) for i in imidx]
+    ret = model(imgs)
+    test_class.assertEqual((len(ret[0]), len(ret[1])), (len(imidx), len(imidx)))
+    return ret[0], ret[1]
+
+
+def run_inference_anime(test_class, detmodels_val):
+    model = Detector(detmodels_val)
+    testdir = osp.dirname(osp.realpath(__file__))
+    imgs = [cv2.imread(osp.join(testdir, 'images', 'anime_det_%u.jpg' % i)) for i in [1, 2, 3, 4]]
+    ret = model(imgs)
+    test_class.assertEqual((len(ret[0]), len(ret[1])), (4, 4))
+    return ret[0], ret[1]
+
+
+def _get_input_coco(with_targets=False):
     testdir = osp.dirname(osp.realpath(__file__))
     im1 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_000139.jpg'))
     im2 = cv2.imread(osp.join(testdir, 'images', 'coco_val2017_455157.jpg'))

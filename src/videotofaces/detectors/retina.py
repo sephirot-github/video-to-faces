@@ -10,7 +10,7 @@ from .components.fpn import FeaturePyramidNetwork
 from .operations.anchor import get_priors, make_anchors
 from .operations.bbox import clamp_to_canvas, decode_boxes, scale_boxes
 from .operations.loss import get_losses
-from .operations.post import get_results, top_per_level
+from .operations.post import get_results, top_per_level, final_nms
 from .operations.prep import prep_targets, preprocess, to_tensors
 from ..utils.weights import load_weights
 
@@ -229,9 +229,5 @@ class RetinaNet_TorchVision(nn.Module):
         
         boxes = decode_boxes(reg[idx], priors[idx % dim], mults=(1, 1), clamp=True)
         boxes = clamp_to_canvas(boxes, sz_used, imidx)
-        res = []
-        for i in range(n):
-            bi, si, ci = [x[imidx == i] for x in [boxes, scores, classes]]
-            keep = torchvision.ops.batched_nms(bi, si, ci, 0.5)[:300]
-            res.append((bi[keep], si[keep], ci[keep]))
-        return map(list, zip(*res))
+        b, s, c = final_nms(boxes, scores, classes, imidx, n, 0.5, 300)
+        return b, s, c

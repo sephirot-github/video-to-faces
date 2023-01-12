@@ -8,7 +8,7 @@ from ..backbones.basic import ConvUnit, BaseMultiReturn
 from ..backbones.mobilenet import MobileNetV2, MobileNetV3L
 from .operations.anchor import get_priors, make_anchors
 from .operations.bbox import clamp_to_canvas, decode_boxes, remove_small, scale_boxes
-from .operations.post import top_per_class, top_per_level
+from .operations.post import top_per_class, top_per_level, final_nms
 from .operations.prep import preprocess
 from ..utils.weights import load_weights
 
@@ -277,9 +277,4 @@ class SSD(nn.Module):
         boxes = decode_boxes(reg[idx], priors[idx % dim], mults=(0.1, 0.2), clamp=True)
         boxes = clamp_to_canvas(boxes, sz_used, imidx)
         boxes, scores, classes, imidx = remove_small(boxes, 0, scores, classes, imidx)
-        res = []
-        for i in range(n):
-            bi, si, ci = [x[imidx == i] for x in [boxes, scores, classes]]
-            keep = torchvision.ops.batched_nms(bi, si, ci, cfg['nms_thr'])[:cfg['imtop']]
-            res.append((bi[keep], si[keep], ci[keep]))
-        return map(list, zip(*res))
+        b, s, c = final_nms(boxes, scores, classes, imidx, n, cfg['nms_thr'], cfg['imtop'])

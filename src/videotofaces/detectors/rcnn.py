@@ -9,9 +9,10 @@ from ..backbones.mobilenet import MobileNetV3L
 from .components.fpn import FeaturePyramidNetwork
 from .operations.anchor import get_priors, make_anchors
 from .operations.bbox import clamp_to_canvas, convert_to_cwh, decode_boxes, remove_small, scale_boxes
-from .operations.loss import get_losses, match_with_targets
-from .operations.post import get_lvidx, roi_align_multilevel
+from .operations.loss import calc_losses, get_losses, match_with_targets
+from .operations.post import get_lvidx, final_nms
 from .operations.prep import preprocess, prep_targets
+from .operations.roi import roi_align_multilevel
 from ..utils.weights import load_weights
 
 
@@ -116,17 +117,16 @@ class RoIProcessingNetwork(nn.Module):
         
         roi_maps = roi_align_multilevel(proposals, imidx, fmaps, fmaps_strides, self.ralign_set)
         reg, log = self.heads(roi_maps)
+        reg = reg.reshape(reg.shape[0], -1, 4)
 
         if self.training:
             labels = torch.cat(labels)
             targets = torch.cat(targets)
             loss_cls = F.cross_entropy(log, labels)
-            reg = reg.reshape(reg.shape[0], -1, 4)
             reg = reg[labels > 0, labels[labels > 0] - 1] # minus 1 because we removed the bckg class
             loss_reg = F.smooth_l1_loss(reg, targets, beta=1/9, reduction='sum') / labels.numel()
             return loss_cls, loss_reg
        
-        reg = reg.reshape(reg.shape[0], -1, 4)
         scr = F.softmax(log, dim=-1)
         cls = torch.arange(log.shape[1], device=log.device).view(1, -1).expand_as(log)
         scr = scr[:, :-1] if not self.bckg_first else scr[:, 1:]
@@ -144,19 +144,8 @@ class RoIProcessingNetwork(nn.Module):
         boxes = decode_boxes(reg, proposals, mults=(0.1, 0.2), clamp=True)
         boxes = clamp_to_canvas(boxes, imsizes, imidx)
         boxes, scr, cls, imidx = remove_small(boxes, cfg['min_size2'], scr, cls, imidx)
-        
-        res = []
-        for i in range(n):
-            bi, si, ci = [x[imidx == i] for x in [boxes, scr, cls]]
-            keep = torchvision.ops.batched_nms(bi, si, ci, cfg['iou_thr2'])[:cfg['imtop2']]
-            res.append((bi[keep], si[keep], ci[keep]))
-        return map(list, zip(*res))
-        #groups = imidx * 1000 + cls
-        #keep = torchvision.ops.batched_nms(boxes, scr, groups, cfg['iou_thr2'])
-        #keep = torch.cat([keep[imidx[keep] == i][:cfg['imtop2']] for i in range(n)])
-        #boxes, scr, cls, imidx = [x[keep] for x in [boxes, scr, cls, imidx]]
-        #boxes, scr, cls = [[x[imidx == i] for i in range(n)] for x in [boxes, scr, cls]]
-        #return boxes, scr, cls
+        b, s, c = final_nms(boxes, scr, cls, imidx, n, cfg['iou_thr2'], cfg['imtop2'])
+        return b, s, c
 
 
 class FasterRCNN(nn.Module):

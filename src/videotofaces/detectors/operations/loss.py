@@ -2,7 +2,6 @@ from functools import partial
 
 import torch
 import torch.nn.functional as F
-from torchvision.ops import sigmoid_focal_loss
 
 from .bbox import calc_iou_matrix, convert_to_xyxy, convert_to_cwh, encode_boxes
 
@@ -67,8 +66,30 @@ def get_matched_labels(gtlabels, gtidxs, sidx_all):
     return labels
 
 
+def binary_cross_entropy(inputs, targets, reduction):
+    targets = targets.to(inputs.dtype)
+    return F.binary_cross_entropy_with_logits(inputs, targets, reduction=reduction)
+
+
+def sigmoid_focal_loss(inputs, targets, alpha=0.25, gamma=2, reduction='sum'):
+    # https://github.com/pytorch/vision/blob/main/torchvision/ops/focal_loss.py
+    
+    expanded = torch.zeros((targets.shape[0], 91), dtype=torch.float32)
+    expanded[targets > 0, targets[targets > 0]] = 1.0
+    targets = expanded
+
+    p = torch.sigmoid(inputs)
+    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+    p_t = p * targets + (1 - p) * (1 - targets)
+    loss = ce_loss * ((1 - p_t) ** gamma)
+    if alpha >= 0:
+        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+        loss = alpha_t * loss
+    return loss.sum()
+
+
 loss_funcs = {
-    'ce_bin': F.binary_cross_entropy_with_logits,
+    'ce_bin': binary_cross_entropy,
     'ce': F.cross_entropy,
     'focal': sigmoid_focal_loss,
     'l1': F.l1_loss,
@@ -81,16 +102,6 @@ def calc_losses(types, logs, regs, labels, targets, avg_mode='total', avg_divs='
     assert avg_divs in ['usual', 'always_pos', 'always_all']
     cls_func = loss_funcs[types[0]]
     reg_func = loss_funcs[types[1]]
-    
-    if types[0] == 'ce_bin':
-        labels = [l.to(logs[0].dtype) for l in labels]
-    if types[0] == 'focal':
-        for i in range(len(labels)):
-            li = labels[i]
-            new = torch.zeros((li.shape[0], 91), dtype=torch.float32)
-            new[li > 0, li[li > 0]] = 1.0
-            labels[i] = new
-
     if avg_mode == 'total':
         logs, regs, labels, targets = [torch.cat(x) for x in [logs, regs, labels, targets]]
         div1 = labels.shape[0] if avg_divs != 'always_pos' else targets.shape[0]

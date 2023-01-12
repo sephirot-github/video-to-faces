@@ -8,7 +8,7 @@ import torchvision.ops
 
 from .operations.anchor import get_priors
 from .operations.bbox import decode_boxes, scale_boxes
-from .operations.post import get_lvidx
+from .operations.post import get_lvidx, final_nms
 from .operations.prep import preprocess
 from ..backbones.basic import ConvUnit
 from ..backbones.mobilenet import MobileNetV2
@@ -218,15 +218,5 @@ class YOLOv3(nn.Module):
         lvidx = get_lvidx(idx % dim, map_sizes)
         stidx = torch.tensor(strides)[lvidx].unsqueeze(-1)
         b = decode_boxes(reg[idx], priors[idx % dim], mode='yolo', strides=stidx)
-
-        res = []
-        for i in range(n):
-            bi, si, ci = [x[imidx == i] for x in [b, s, c]]
-            keep = torchvision.ops.batched_nms(bi, si, ci, 0.45)[:100]
-            res.append((bi[keep], si[keep], ci[keep]))
-        b, s, c = map(list, zip(*res))
-        #k = imidx * 1000 + c
-        #keep = torchvision.ops.batched_nms(b, s, k, 0.45)
-        #b, s, c, imidx = [x[keep] for x in [b, s, c, imidx]]
-        #b, s, c = [[x[imidx == i] for i in range(n)] for x in [b, s, c]]
+        b, s, c = final_nms(b, s, c, imidx, n, 0.45, 100)
         return b, s, c
