@@ -28,16 +28,23 @@ def merge_last(x, n_dims):
 
 class MultiHeadedSelfAttention(nn.Module):
     
-    def __init__(self, dim, num_heads, att_scale):
+    def __init__(self, dim, num_heads, att_shared, att_scale):
         super().__init__()
-        self.proj_q = nn.Linear(dim, dim)
-        self.proj_k = nn.Linear(dim, dim)
-        self.proj_v = nn.Linear(dim, dim)
+        if not att_shared:
+            self.proj_q = nn.Linear(dim, dim)
+            self.proj_k = nn.Linear(dim, dim)
+            self.proj_v = nn.Linear(dim, dim)
+        else:
+            self.proj = nn.Linear(dim, dim * 3)
+        self.att_shared = att_shared
         self.n_heads = num_heads
         self.scale = dim if att_scale != 'per_head' else dim // num_heads
     
     def forward(self, x):
-        q, k, v = self.proj_q(x), self.proj_k(x), self.proj_v(x)
+        if not self.att_shared:
+            q, k, v = self.proj_q(x), self.proj_k(x), self.proj_v(x)
+        else:
+            q, k, v = self.proj(x), self.proj(x), self.proj(x)
         q, k, v = (split_last(x, (self.n_heads, -1)).transpose(1, 2) for x in [q, k, v])
         scores = q @ k.transpose(-2, -1) / np.sqrt(self.scale)
         scores = F.softmax(scores, dim=-1)
@@ -59,10 +66,10 @@ class PositionWiseFeedForward(nn.Module):
 
 class Block(nn.Module):
     
-    def __init__(self, dim, heads, ff_dim, eps, att_scale):
+    def __init__(self, dim, heads, ff_dim, eps, att_shared, att_scale):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim, eps=eps)
-        self.attn = MultiHeadedSelfAttention(dim, heads, att_scale)
+        self.attn = MultiHeadedSelfAttention(dim, heads, att_shared, att_scale)
         self.proj = nn.Linear(dim, dim)
         self.norm2 = nn.LayerNorm(dim, eps=eps)
         self.pwff = PositionWiseFeedForward(dim, ff_dim)
@@ -78,9 +85,9 @@ class Block(nn.Module):
 
 class Transformer(nn.Module):
     
-    def __init__(self, dim, depth, heads, ff_dim, eps, att_scale):
+    def __init__(self, dim, depth, heads, ff_dim, eps, att_shared, att_scale):
         super().__init__()
-        self.blocks = nn.ModuleList([Block(dim, heads, ff_dim, eps, att_scale) for _ in range(depth)])
+        self.blocks = nn.ModuleList([Block(dim, heads, ff_dim, eps, att_shared, att_scale) for _ in range(depth)])
     
     def forward(self, x):
         for block in self.blocks:
@@ -90,18 +97,24 @@ class Transformer(nn.Module):
 
 class ViT(nn.Module):
     
-    def __init__(self, img_size, patch_size, dim, depth, heads, ff_dim, eps=1e-05, stem='conv', att_scale='total', classes=None, loss=None):
+    def __init__(self, img_size, patch_size, dim, depth, heads, ff_dim, eps=1e-05, stem='conv',
+                 pre_norm=False, att_shared=False, att_scale='total', projection=None,
+                 classes=None, loss=None):
         super().__init__()
         self.patch_size = patch_size
         self.classes = classes
         self.stem = stem
-        if stem == 'conv': self.patch_embedding = nn.Conv2d(3, dim, (patch_size, patch_size), (patch_size, patch_size))
-        if stem == 'linr': self.patch_embedding = nn.Linear(3 * patch_size ** 2, dim)
-        if stem == 'linr_ov': self.patch_embedding = nn.Linear(3 * 12 ** 2, dim)
         self.class_token = nn.Parameter(torch.zeros(1, 1, dim))
         self.pos_embedding = nn.Parameter(torch.zeros(1, (img_size // patch_size) ** 2 + 1, dim))
-        self.transformer = Transformer(dim, depth, heads, ff_dim, eps, att_scale)
+        if stem == 'conv': self.patch_embedding = nn.Conv2d(3, dim, (patch_size, patch_size), (patch_size, patch_size), bias = not pre_norm)
+        if stem == 'linr': self.patch_embedding = nn.Linear(3 * patch_size ** 2, dim)
+        if stem == 'linr_ov': self.patch_embedding = nn.Linear(3 * 12 ** 2, dim)
+        if pre_norm:
+            self.norm_pre = nn.LayerNorm(dim, eps=eps)
+        self.transformer = Transformer(dim, depth, heads, ff_dim, eps, att_shared, att_scale)
         self.norm = nn.LayerNorm(dim, eps=eps)
+        if projection is not None:
+            self.projection = nn.Parameter(torch.zeros(dim, projection))
         if classes and loss == 'CE':
             self.fc = nn.Linear(dim, classes)
         elif classes and loss == 'CosFace':
@@ -110,16 +123,20 @@ class ViT(nn.Module):
     def forward(self, x):
         if self.stem == 'conv':
             x = self.patch_embedding(x)             # [bs, dim, n, n] (n = img_size // patch_size = number of patches)
-            x = x.flatten(2).transpose(1, 2)    # [bs, n*n, dim]
+            x = x.flatten(2).transpose(1, 2)        # [bs, n*n, dim]
         else:
-            x = self._unfold_input(x)                 # [bs, n*n, 3*p*p]
+            x = self._unfold_input(x)               # [bs, n*n, 3*p*p]
             x = self.patch_embedding(x)             # [bs, n*n, dim]
         t = self.class_token.expand(x.shape[0], -1, -1)
         x = torch.cat((t, x), dim=1)                # [bs, n*n+1, dim]
-        x = x + self.pos_embedding                    # [bs, n*n+1, dim]
-        x = self.transformer(x)                         # [bs, n*n+1, dim]
-        x = x[:, 0]                                                 # [bs, dim]
-        x = self.norm(x)                                        # [bs, dim]
+        x = x + self.pos_embedding                  # [bs, n*n+1, dim]
+        if hasattr(self, 'norm_pre'):
+            x = self.norm_pre(x)
+        x = self.transformer(x)                     # [bs, n*n+1, dim]
+        x = x[:, 0]                                 # [bs, dim]
+        x = self.norm(x)                            # [bs, dim]
+        if hasattr(self, 'projection'):
+            x = x @ self.projection
         if not self.classes: return x
         return self.fc(x)
 
@@ -142,6 +159,52 @@ class ViT(nn.Module):
         #x = F.pixel_unshuffle(x, p).reshape(n, c * p ** 2, -1).transpose(1, 2)
         #x = F.unfold(x, p, stride=p).transpose(1, 2)
         return x
+
+
+class VitClip():
+    links = {
+        'B-32': 'https://openaipublic.azureedge.net/clip/models/40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt',
+        'B-16': 'https://openaipublic.azureedge.net/clip/models/5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f/ViT-B-16.pt',
+        'L-14': 'https://openaipublic.azureedge.net/clip/models/b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836/ViT-L-14.pt',
+    }
+    def __init__(self, device, typ):
+        import os.path as osp
+        assert typ in ['B-32', 'B-16', 'L-14']
+        print('Initializing ViT-%s model from CLIP' % typ)
+        wf = prep_weights_file(self.links[typ], osp.basename(self.links[typ]))
+        wd_clip = torch.jit.load('ViT-%s.pt' % typ, map_location='cpu').eval().state_dict()
+        neworder = []
+        for nm in wd_clip:
+            if nm.startswith('visual.'):
+                if 'ln_1' in nm or 'ln_2' in nm:
+                    # norms' weights are after attention/feedforward in source, but we need before
+                    neworder.insert(len(neworder) - 4, nm)
+                else:
+                    neworder.append(nm)
+        wd = {}
+        for nm in neworder:
+            wd[nm.replace('visual.', '')] = wd_clip[nm]
+        wd['class_embedding'] = wd['class_embedding'].unsqueeze(0).unsqueeze(0)
+        wd['positional_embedding'] = wd['positional_embedding'].unsqueeze(0)
+        names = list(wd)
+        dst = {}
+        self.model = ViT(img_size=224, patch_size=32, dim=768, depth=12, heads=12, ff_dim=768*4,
+                         pre_norm=True, att_shared=True, projection=512).to(device)
+        for i, w in enumerate(list(self.model.state_dict())):
+            #print(names[i], ' to ', w)
+            dst[w] = wd[names[i]]
+        self.model.load_state_dict(dst)
+        self.model.eval()
+        print()
+        
+    def __call__(self, imagesPIL):
+        from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, InterpolationMode
+        prep = Compose([Resize(224, interpolation=InterpolationMode.BICUBIC), CenterCrop(224), ToTensor(),
+                        Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),])
+        with torch.no_grad():
+            inp = torch.stack([prep(im) for im in imagesPIL])
+            out = self.model(inp)
+        return out.cpu().numpy()
 
 
 class VitEncoder():
@@ -188,7 +251,11 @@ class VitEncoder():
         print()
     
     def __call__(self, images):
-        return None
+        inp = cv2.dnn.blobFromImages(images, 1, (112, 112), (0, 0, 0), swapRB=True)
+        inp = torch.from_numpy(inp)
+        with torch.no_grad():
+            out = self.model(inp)
+        return out.cpu().numpy()
         
     
 class VitEncoderAnime():
