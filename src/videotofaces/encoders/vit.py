@@ -10,69 +10,58 @@ from ..utils import prep_weights_file
 # https://github.com/arkel23/animesion/tree/main/classification_tagging/models/vit_animesion
 # https://github.com/zhongyy/Face-Transformer/tree/main/copy-to-vit_pytorch-path
 # all dropouts are removed since using only for inference
-
-
-def split_last(x, shape):
-    shape = list(shape)
-    assert shape.count(-1) <= 1
-    if -1 in shape:
-        shape[shape.index(-1)] = int(x.size(-1) / -np.prod(shape))
-    return x.view(*x.size()[:-1], *shape)
-
-
-def merge_last(x, n_dims):
-    s = x.size()
-    assert n_dims > 1 and n_dims < len(s)
-    return x.view(*s[:-n_dims], -1)
-
+# https://github.com/huggingface/transformers/blob/main/src/transformers/models/clip/modeling_clip.py#L235
+# https://github.com/openai/CLIP/blob/main/clip/model.py
 
 class MultiHeadedSelfAttention(nn.Module):
     
-    def __init__(self, dim, num_heads, att_shared, att_scale):
+    def __init__(self, dim, num_heads, att_scale):
         super().__init__()
-        if not att_shared:
-            self.proj_q = nn.Linear(dim, dim)
-            self.proj_k = nn.Linear(dim, dim)
-            self.proj_v = nn.Linear(dim, dim)
-        else:
-            self.proj = nn.Linear(dim, dim * 3)
-        self.att_shared = att_shared
+        self.proj_q = nn.Linear(dim, dim)
+        self.proj_k = nn.Linear(dim, dim)
+        self.proj_v = nn.Linear(dim, dim)
         self.n_heads = num_heads
         self.scale = dim if att_scale != 'per_head' else dim // num_heads
     
+    def split(self, x):
+        return x.view(*x.shape[:2], self.n_heads, -1).transpose(1, 2)
+
     def forward(self, x):
-        if not self.att_shared:
-            q, k, v = self.proj_q(x), self.proj_k(x), self.proj_v(x)
-        else:
-            q, k, v = self.proj(x), self.proj(x), self.proj(x)
-        q, k, v = (split_last(x, (self.n_heads, -1)).transpose(1, 2) for x in [q, k, v])
-        scores = q @ k.transpose(-2, -1) / np.sqrt(self.scale)
+        q, k, v = self.proj_q(x), self.proj_k(x), self.proj_v(x) # [bs, n*n+1, dim]
+        q, k, v = [self.split(el) for el in [q, k, v]]           # [bs, heads, n*n+1, dim/heads]
+        scores = q @ k.transpose(2, 3) / np.sqrt(self.scale)     # [bs, heads, n*n+1, n*n+1]
         scores = F.softmax(scores, dim=-1)
-        h = (scores @ v).transpose(1, 2).contiguous()
-        h = merge_last(h, 2)
+        h = (scores @ v).transpose(1, 2)   # [bs, n*n+1, heads, dim/heads]
+        h = h.reshape(*x.shape[:2], -1)    # [bs, n*n+1, dim]
         return h
 
 
 class PositionWiseFeedForward(nn.Module):
     
-    def __init__(self, dim, ff_dim):
+    def __init__(self, dim, ff_dim, gelu_type):
         super().__init__()
+        assert gelu_type in ['exact', 'quick']
+        self.act = F.gelu if gelu_type == 'exact' else self.quick_gelu
         self.fc1 = nn.Linear(dim, ff_dim)
         self.fc2 = nn.Linear(ff_dim, dim)
-    
+        
+    def quick_gelu(self, x):
+        # https://github.com/huggingface/transformers/blob/main/src/transformers/activations.py#L90
+        return x * torch.sigmoid(1.702 * x)
+
     def forward(self, x):
-        return self.fc2(F.gelu(self.fc1(x)))
+        return self.fc2(self.act(self.fc1(x)))
 
 
 class Block(nn.Module):
     
-    def __init__(self, dim, heads, ff_dim, eps, att_shared, att_scale):
+    def __init__(self, dim, heads, ff_dim, eps, att_scale, gelu_type):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim, eps=eps)
-        self.attn = MultiHeadedSelfAttention(dim, heads, att_shared, att_scale)
+        self.attn = MultiHeadedSelfAttention(dim, heads, att_scale)
         self.proj = nn.Linear(dim, dim)
         self.norm2 = nn.LayerNorm(dim, eps=eps)
-        self.pwff = PositionWiseFeedForward(dim, ff_dim)
+        self.pwff = PositionWiseFeedForward(dim, ff_dim, gelu_type)
     
     def forward(self, x):
         h = self.attn(self.norm1(x))
@@ -85,9 +74,9 @@ class Block(nn.Module):
 
 class Transformer(nn.Module):
     
-    def __init__(self, dim, depth, heads, ff_dim, eps, att_shared, att_scale):
+    def __init__(self, dim, depth, heads, ff_dim, eps, att_scale, gelu_type):
         super().__init__()
-        self.blocks = nn.ModuleList([Block(dim, heads, ff_dim, eps, att_shared, att_scale) for _ in range(depth)])
+        self.blocks = nn.ModuleList([Block(dim, heads, ff_dim, eps, att_scale, gelu_type) for _ in range(depth)])
     
     def forward(self, x):
         for block in self.blocks:
@@ -98,7 +87,7 @@ class Transformer(nn.Module):
 class ViT(nn.Module):
     
     def __init__(self, img_size, patch_size, dim, depth, heads, ff_dim, eps=1e-05, stem='conv',
-                 pre_norm=False, att_shared=False, att_scale='total', projection=None,
+                 pre_norm=False, att_scale='total', gelu_type='exact', projection=None,
                  classes=None, loss=None):
         super().__init__()
         self.patch_size = patch_size
@@ -111,10 +100,10 @@ class ViT(nn.Module):
         if stem == 'linr_ov': self.patch_embedding = nn.Linear(3 * 12 ** 2, dim)
         if pre_norm:
             self.norm_pre = nn.LayerNorm(dim, eps=eps)
-        self.transformer = Transformer(dim, depth, heads, ff_dim, eps, att_shared, att_scale)
+        self.transformer = Transformer(dim, depth, heads, ff_dim, eps, att_scale, gelu_type)
         self.norm = nn.LayerNorm(dim, eps=eps)
         if projection is not None:
-            self.projection = nn.Parameter(torch.zeros(dim, projection))
+            self.projection = nn.Linear(dim, projection, bias=False) # nn.Parameter(torch.zeros(dim, projection))
         if classes and loss == 'CE':
             self.fc = nn.Linear(dim, classes)
         elif classes and loss == 'CosFace':
@@ -136,7 +125,7 @@ class ViT(nn.Module):
         x = x[:, 0]                                 # [bs, dim]
         x = self.norm(x)                            # [bs, dim]
         if hasattr(self, 'projection'):
-            x = x @ self.projection
+            x = self.projection(x) #x = x @ self.projection
         if not self.classes: return x
         return self.fc(x)
 
@@ -162,38 +151,67 @@ class ViT(nn.Module):
 
 
 class VitClip():
+    
     links = {
         'B-32': 'https://openaipublic.azureedge.net/clip/models/40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt',
         'B-16': 'https://openaipublic.azureedge.net/clip/models/5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f/ViT-B-16.pt',
         'L-14': 'https://openaipublic.azureedge.net/clip/models/b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836/ViT-L-14.pt',
     }
+
+    def convert_weights(self, wd_clip):
+        wl = []
+        proj = None
+        for nm in wd_clip:
+            if not nm.startswith('visual.'):
+                # ignoring the text part, we only ViT
+                continue
+            if 'attn.in_proj_weight' in nm:
+                # proj_k/q/v are joined into one in OG CLIP dict, we need separate
+                cb = nm.replace('_weight', '_bias')
+                ws = wd_clip[nm].chunk(3)
+                bs = wd_clip[cb].chunk(3)
+                for i in range(3):
+                    wl.append((nm, ws[i]))
+                    wl.append((cb, bs[i]))
+            elif 'attn.in_proj_bias' in nm:
+                # skipping bias since we did it above alongside main weights
+                continue
+            elif 'ln_1' in nm:
+                # norm 1 is after attention in OG CLIP dict, we need before
+                wl.insert(len(wl) - 8, (nm, wd_clip[nm]))
+            elif 'ln_2' in nm:
+                # norm 2 is after feedforward in OG CLIP dict, we need before
+                wl.insert(len(wl) - 4, (nm, wd_clip[nm]))
+            elif 'class_embedding' in nm:
+                wl.append((nm, wd_clip[nm].unsqueeze(0).unsqueeze(0)))
+            elif 'positional_embedding' in nm:
+                wl.append((nm, wd_clip[nm].unsqueeze(0)))
+            elif nm == 'visual.proj':
+                # projection weights are near the beginning, we need them last
+                proj = (nm, wd_clip[nm].transpose(1, 0))
+            else:
+                wl.append((nm, wd_clip[nm]))
+        wl.append(proj)
+        return wl
+
     def __init__(self, device, typ):
         import os.path as osp
         assert typ in ['B-32', 'B-16', 'L-14']
         print('Initializing ViT-%s model from CLIP' % typ)
         wf = prep_weights_file(self.links[typ], osp.basename(self.links[typ]))
-        wd_clip = torch.jit.load('ViT-%s.pt' % typ, map_location='cpu').eval().state_dict()
-        neworder = []
-        for nm in wd_clip:
-            if nm.startswith('visual.'):
-                if 'ln_1' in nm or 'ln_2' in nm:
-                    # norms' weights are after attention/feedforward in source, but we need before
-                    neworder.insert(len(neworder) - 4, nm)
-                else:
-                    neworder.append(nm)
+        wd_clip = torch.jit.load(wf, map_location='cpu').eval().state_dict()
+        wl = self.convert_weights(wd_clip)
+        ps = int(typ.split('-')[1]) # patch size is contained in the name (e.g. 'L-14' => size=14)
+        dim =  768 if typ != 'L-14' else 1024
+        depth = 12 if typ != 'L-14' else 24
+        proj = 512 if typ != 'L-14' else 768
+        self.model = ViT(img_size=224, patch_size=ps, dim=dim, depth=depth, heads=dim//64, ff_dim=dim*4,
+                         pre_norm=True, att_scale='per_head', gelu_type='quick', projection=proj).to(device)
         wd = {}
-        for nm in neworder:
-            wd[nm.replace('visual.', '')] = wd_clip[nm]
-        wd['class_embedding'] = wd['class_embedding'].unsqueeze(0).unsqueeze(0)
-        wd['positional_embedding'] = wd['positional_embedding'].unsqueeze(0)
-        names = list(wd)
-        dst = {}
-        self.model = ViT(img_size=224, patch_size=32, dim=768, depth=12, heads=12, ff_dim=768*4,
-                         pre_norm=True, att_shared=True, projection=512).to(device)
         for i, w in enumerate(list(self.model.state_dict())):
-            #print(names[i], ' to ', w)
-            dst[w] = wd[names[i]]
-        self.model.load_state_dict(dst)
+            #print(wl[i][0], ' to ', w)
+            wd[w] = wl[i][1]
+        self.model.load_state_dict(wd)
         self.model.eval()
         print()
         
