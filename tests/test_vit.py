@@ -1,4 +1,5 @@
 import os.path as osp
+import sys
 import unittest
 
 import cv2
@@ -7,6 +8,9 @@ import PIL.Image
 import torch
 
 from videotofaces.encoders.vit import VitEncoderAnime, VitEncoder, VitClip
+
+EXTENDED = False
+
 
 class TestVIT(unittest.TestCase):
 
@@ -18,8 +22,12 @@ class TestVIT(unittest.TestCase):
         self.assertEqual(res.shape, (2, 768))
         np.testing.assert_almost_equal(res[0][100:105], np.array([-0.4530, -2.1694, 0.0624, -0.7991, -0.3798]), decimal=4)
         np.testing.assert_almost_equal(res[1][640:645], np.array([0.3255, -0.6816, -0.1108,  0.2946,  1.7022]), decimal=4)
-        # and large one
-        # model = VitEncoderAnime('cpu', True)
+        if EXTENDED:
+            model = VitEncoderAnime('cpu', True) # large one
+            res = model(imgs)
+            self.assertEqual(res.shape, (2, 1024))
+            np.testing.assert_almost_equal(res[0][900:905], np.array([-1.5694, 0.1522, -1.8948, -1.2867, -1.8749]), decimal=4)
+            np.testing.assert_almost_equal(res[1][175:180], np.array([0.3184, -1.2670, -0.0992, -0.0231,  0.5195]), decimal=4)
 
     def test_vit_face(self):
         testdir = osp.dirname(osp.realpath(__file__))
@@ -46,4 +54,7 @@ class TestVIT(unittest.TestCase):
 
 
 if __name__ == '__main__':
+    if len(sys.argv) > 1:
+        EXTENDED = sys.argv[1] == 'EXT'
+        sys.argv.pop()
     unittest.main()
