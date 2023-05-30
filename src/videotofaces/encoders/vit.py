@@ -1,3 +1,6 @@
+import os
+import os.path as osp
+
 import cv2
 import numpy as np
 import torch
@@ -15,13 +18,13 @@ from ..utils import prep_weights_file
 
 class MultiHeadedSelfAttention(nn.Module):
     
-    def __init__(self, dim, num_heads, att_scale):
+    def __init__(self, dim, heads, att_scale):
         super().__init__()
         self.proj_q = nn.Linear(dim, dim)
         self.proj_k = nn.Linear(dim, dim)
         self.proj_v = nn.Linear(dim, dim)
-        self.n_heads = num_heads
-        self.scale = dim if att_scale != 'per_head' else dim // num_heads
+        self.n_heads = heads
+        self.scale = dim if att_scale != 'per_head' else dim // heads
     
     def split(self, x):
         return x.view(*x.shape[:2], self.n_heads, -1).transpose(1, 2)
@@ -86,7 +89,7 @@ class Transformer(nn.Module):
 
 class ViT(nn.Module):
     
-    def __init__(self, img_size, patch_size, dim, depth, heads, ff_dim, eps=1e-05, stem='conv',
+    def __init__(self, img_size, patch_size, dim, depth, eps=1e-05, stem='conv',
                  pre_norm=False, att_scale='total', gelu_type='exact', projection=None,
                  classes=None, loss=None):
         super().__init__()
@@ -100,7 +103,7 @@ class ViT(nn.Module):
         if stem == 'linr_ov': self.patch_embedding = nn.Linear(3 * 12 ** 2, dim)
         if pre_norm:
             self.norm_pre = nn.LayerNorm(dim, eps=eps)
-        self.transformer = Transformer(dim, depth, heads, ff_dim, eps, att_scale, gelu_type)
+        self.transformer = Transformer(dim, depth, dim//64, dim*4, eps, att_scale, gelu_type)
         self.norm = nn.LayerNorm(dim, eps=eps)
         if projection is not None:
             self.projection = nn.Linear(dim, projection, bias=False) # nn.Parameter(torch.zeros(dim, projection))
@@ -127,7 +130,7 @@ class ViT(nn.Module):
         if hasattr(self, 'projection'):
             x = self.projection(x) #x = x @ self.projection
         if not self.classes: return x
-        return self.fc(x)
+        return self.fc(x), x
 
     def _unfold_input(self, x): # [bs, 3, 112, 112]
         """If stem (1st layer) isn't conv but linear, need to unwrap every [3, p, p] patch from input images into a flattened column
@@ -152,10 +155,11 @@ class ViT(nn.Module):
 
 class VitClip():
     
+    openai_base = 'https://openaipublic.azureedge.net/clip/models/'
     links = {
-        'B-32': 'https://openaipublic.azureedge.net/clip/models/40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt',
-        'B-16': 'https://openaipublic.azureedge.net/clip/models/5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f/ViT-B-16.pt',
-        'L-14': 'https://openaipublic.azureedge.net/clip/models/b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836/ViT-L-14.pt',
+        'B-32': openai_base + '40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt',
+        'B-16': openai_base + '5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f/ViT-B-16.pt',
+        'L-14': openai_base + 'b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836/ViT-L-14.pt',
     }
 
     def convert_weights(self, wd_clip):
@@ -195,8 +199,7 @@ class VitClip():
         return wl
 
     def __init__(self, device, typ):
-        import os.path as osp
-        assert typ in ['B-32', 'B-16', 'L-14']
+        assert typ in self.links
         print('Initializing ViT-%s model from CLIP' % typ)
         wf = prep_weights_file(self.links[typ], osp.basename(self.links[typ]))
         wd_clip = torch.jit.load(wf, map_location='cpu').eval().state_dict()
@@ -205,7 +208,7 @@ class VitClip():
         dim =  768 if typ != 'L-14' else 1024
         depth = 12 if typ != 'L-14' else 24
         proj = 512 if typ != 'L-14' else 768
-        self.model = ViT(img_size=224, patch_size=ps, dim=dim, depth=depth, heads=dim//64, ff_dim=dim*4,
+        self.model = ViT(img_size=224, patch_size=ps, dim=dim, depth=depth,
                          pre_norm=True, att_scale='per_head', gelu_type='quick', projection=proj).to(device)
         wd = {}
         for i, w in enumerate(list(self.model.state_dict())):
@@ -236,7 +239,7 @@ class VitEncoder():
             print('Initializing ViT-P8S8 model for face feature extraction')
             wf = prep_weights_file('https://drive.google.com/uc?id=1OZRU430CjABSJtXU0oHZHlxgzXn6Gaqu', 'Backbone_VIT_Epoch_2_Batch_20000_Time_2021-01-12-16-48_checkpoint.pth', gdrive=True)
     
-        self.model = ViT(img_size=112, patch_size=8, dim=512, depth=20, heads=8, ff_dim=2048, stem='linr_ov' if isP12S8 else 'linr', classes=num_cls).to(device)
+        self.model = ViT(img_size=112, patch_size=8, dim=512, depth=20, stem='linr_ov' if isP12S8 else 'linr', classes=num_cls).to(device)
         weights = torch.load(wf, map_location=torch.device(device))
 
         weights['class_token'] = weights.pop('cls_token')
@@ -278,18 +281,27 @@ class VitEncoder():
     
 class VitEncoderAnime():
 
-    def __init__(self, device, isL, classify=False):
+    # https://drive.google.com/drive/folders/1fzLLGvu7IzmjFy8LZolwkT-NTzZPYonb
+    # 1hEtmrzlh7RrXuUoxi5eqMQd5yIirQ-XC - verify_danbooruFaces_b16_ptTrue_bat....ckpt  336.6MB Aug 20, 2021 : ViT-B-16
+    # 1eZai1_gjos6TNeQZg6IY-cIWxtg0Pxah - verify_danbooruFaces_l16_ptTrue_bat....ckpt  1.14GB  Aug 20, 2021 : ViT-L-16
+    # 1kJx8eLmY0kv4m8QV-N8MwoLLbxLfN87g - danbooruFaces_B_16_image128_batch16....ckpt  336.6MB Jan 15, 2022 : ViT-B-16-IFA
+    # 1V0kF67t9bEsO3sHtcHtPAePGmjfYdvHc - danbooruFaces_L_16_image128_batch16....ckpt  1.14GB  Jan 17, 2022 : ViT-L-16-IFA
+    # 1pFADAEGz8woim_MRhDhtBN4hW6BrQByH - danbooruFull_B_16_image128_batch16_....ckpt  378.5MB Aug 20, 2021 : ViLT-B-16
+    gids = {
+        'B-16-Danbooru-Faces': '1hEtmrzlh7RrXuUoxi5eqMQd5yIirQ-XC',
+        'L-16-Danbooru-Faces': '1eZai1_gjos6TNeQZg6IY-cIWxtg0Pxah',
+        'B-16-Danbooru-Full': '1pFADAEGz8woim_MRhDhtBN4hW6BrQByH',
+    }
+
+    def __init__(self, device, typ='B-16-Danbooru-Faces', classify=False):
+        assert typ in self.gids
         num_cls = None if not classify else 3263
-        if isL:
-            print('Initializing ViT-L/16 model for anime face feature extraction')
-            wf = prep_weights_file('https://drive.google.com/uc?id=1eZai1_gjos6TNeQZg6IY-cIWxtg0Pxah',
-                                   'verify_danbooruFaces_l16_ptTrue_batch16_imageSize128_50epochs_epochDecay20.ckpt', gdrive=True)
-            self.model = ViT(img_size=128, patch_size=16, dim=1024, depth=24, heads=16, ff_dim=4096, eps=1e-12, att_scale='per_head', classes=num_cls, loss='CE').to(device)
-        else:
-            print('Initializing ViT-B/16 model for anime face feature extraction')
-            wf = prep_weights_file('https://drive.google.com/uc?id=1hEtmrzlh7RrXuUoxi5eqMQd5yIirQ-XC',
-                                   'verify_danbooruFaces_b16_ptTrue_batch16_imageSize128_50epochs_epochDecay20.ckpt', gdrive=True)
-            self.model = ViT(img_size=128, patch_size=16, dim=768, depth=12, heads=12, ff_dim=3072, eps=1e-12, att_scale='per_head', classes=num_cls, loss='CE').to(device)
+        #if isL:
+        print('Initializing ViT-%s model' % typ)
+        wf = prep_weights_file('https://drive.google.com/uc?id=%s' % self.gids[typ], 'ViT-%s.ckpt' % typ)
+        dim =  768 if typ[0] != 'L' else 1024
+        depth = 12 if typ[0] != 'L' else 24
+        self.model = ViT(128, 16, dim, depth, 1e-12, att_scale='per_head', classes=num_cls, loss='CE').to(device)
         weights = torch.load(wf, map_location=torch.device(device))
         weights = dict((key.replace('model.', ''), value) for (key, value) in weights.items())
         weights['pos_embedding'] = weights.pop('positional_embedding.pos_embedding')
@@ -305,4 +317,19 @@ class VitEncoderAnime():
         inp = torch.from_numpy(inp)
         with torch.no_grad():
             out = self.model(inp)
+        if isinstance(out, tuple):
+            return (out[0], out[1].cpu().numpy())
         return out.cpu().numpy()
+
+    def get_predictions(self, logits, topk=5):
+        home = osp.dirname(osp.dirname(osp.realpath(__file__))) if '__file__' in globals() else os.getcwd()
+        # https://raw.githubusercontent.com/arkel23/Danbooru2018AnimeCharacterRecognitionDataset_Revamped/master/labels/classid_classname.csv
+        clsf = osp.join(home, 'classes', 'dafre.csv')
+        with open(clsf, encoding='utf-8') as f:
+            classes = dict([l.split(',') for l in f.read().splitlines()])
+        res = []
+        for i, idx in enumerate(torch.topk(logits, k=topk).indices.tolist()):
+            prob = torch.softmax(logits, -1)[idx].item() * 100
+            class_name = classes[str(idx)]
+            res.append((class_name, prob))
+        return res
