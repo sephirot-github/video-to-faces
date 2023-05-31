@@ -129,8 +129,11 @@ class ViT(nn.Module):
         x = self.norm(x)                            # [bs, dim]
         if hasattr(self, 'projection'):
             x = self.projection(x) #x = x @ self.projection
-        if not self.classes: return x
-        return self.fc(x), x
+        if not self.classes:
+            return x
+        y = self.fc(x)
+        y = torch.softmax(y, dim=-1)
+        return y, x
 
     def _unfold_input(self, x): # [bs, 3, 112, 112]
         """If stem (1st layer) isn't conv but linear, need to unwrap every [3, p, p] patch from input images into a flattened column
@@ -296,7 +299,6 @@ class VitEncoderAnime():
     def __init__(self, device, typ='B-16-Danbooru-Faces', classify=False):
         assert typ in self.gids
         num_cls = None if not classify else 3263
-        #if isL:
         print('Initializing ViT-%s model' % typ)
         wf = prep_weights_file('https://drive.google.com/uc?id=%s' % self.gids[typ], 'ViT-%s.ckpt' % typ)
         dim =  768 if typ[0] != 'L' else 1024
@@ -318,18 +320,20 @@ class VitEncoderAnime():
         with torch.no_grad():
             out = self.model(inp)
         if isinstance(out, tuple):
-            return (out[0], out[1].cpu().numpy())
+            return (out[0].cpu().numpy(), out[1].cpu().numpy())
         return out.cpu().numpy()
 
-    def get_predictions(self, logits, topk=5):
+    def get_predictions(self, probs, topk=5):
         home = osp.dirname(osp.dirname(osp.realpath(__file__))) if '__file__' in globals() else os.getcwd()
         # https://raw.githubusercontent.com/arkel23/Danbooru2018AnimeCharacterRecognitionDataset_Revamped/master/labels/classid_classname.csv
         clsf = osp.join(home, 'classes', 'dafre.csv')
         with open(clsf, encoding='utf-8') as f:
-            classes = dict([l.split(',') for l in f.read().splitlines()])
+            classes = [l.split(',') for l in f.read().splitlines()]
+            classes = dict([(int(ind), nm) for ind, nm in classes])
         res = []
-        for i, idx in enumerate(torch.topk(logits, k=topk).indices.tolist()):
-            prob = torch.softmax(logits, -1)[idx].item() * 100
-            class_name = classes[str(idx)]
-            res.append((class_name, prob))
+        for pb in probs:
+            # https://stackoverflow.com/a/38772601
+            idx = np.argpartition(pb, -topk)[-topk:]    # returns largest k unordered
+            idx = idx[np.argsort(pb[idx])[::-1]]        # makes them ordered
+            res.append([(classes[ind], pb[ind] * 100) for ind in idx])
         return res

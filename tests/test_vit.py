@@ -18,18 +18,28 @@ class TestVIT(unittest.TestCase):
         testdir = osp.dirname(osp.realpath(__file__))
         imgs = [cv2.imread(osp.join(testdir, 'images', 'aniface%u.jpg' % i)) for i in [1, 2]]
         model = VitEncoderAnime('cpu', 'B-16-Danbooru-Faces', classify=True)
-        lgt, emb = model(imgs)
+        prob, emb = model(imgs)
         self.assertEqual(emb.shape, (2, 768))
         np.testing.assert_almost_equal(emb[0][100:105], np.array([-0.4530, -2.1694, 0.0624, -0.7991, -0.3798]), decimal=4)
         np.testing.assert_almost_equal(emb[1][640:645], np.array([0.3255, -0.6816, -0.1108,  0.2946,  1.7022]), decimal=4)
-        self.assertEqual(lgt.shape, (2, 3263))
-        
+        self.assertEqual(prob.shape, (2, 3263))
+        pred = model.get_predictions(prob)
+        self.assertEqual([len(pred), len(pred[0]), len(pred[1])], [2, 5, 5])
+        txt = [[(nm, '%.6f' % pb) for nm, pb in group[:2]] for group in pred]
+        self.assertEqual(txt[0], [('shirai_kuroko', '99.998939'), ('fukuzawa_yumi', '0.000314')])
+        self.assertEqual(txt[1], [('misaka_mikoto', '99.951982'), ('misaka_imouto', '0.040299')])
         if EXTENDED:
-            model = VitEncoderAnime('cpu', 'L-16-Danbooru-Faces')
-            res = model(imgs)
-            self.assertEqual(res.shape, (2, 1024))
-            np.testing.assert_almost_equal(res[0][900:905], np.array([-1.5694, 0.1522, -1.8948, -1.2867, -1.8749]), decimal=4)
-            np.testing.assert_almost_equal(res[1][175:180], np.array([0.3184, -1.2670, -0.0992, -0.0231,  0.5195]), decimal=4)
+            model = VitEncoderAnime('cpu', 'L-16-Danbooru-Faces', classify=True)
+            prob, emb = model(imgs)
+            self.assertEqual(emb.shape, (2, 1024))
+            np.testing.assert_almost_equal(emb[0][900:905], np.array([-1.5694, 0.1522, -1.8948, -1.2867, -1.8749]), decimal=4)
+            np.testing.assert_almost_equal(emb[1][175:180], np.array([0.3184, -1.2670, -0.0992, -0.0231,  0.5195]), decimal=4)
+            self.assertEqual(prob.shape, (2, 3263))
+            pred = model.get_predictions(prob)
+            self.assertEqual([len(pred), len(pred[0]), len(pred[1])], [2, 5, 5])
+            txt = [[(nm, '%.6f' % pb) for nm, pb in group[:2]] for group in pred]
+            self.assertEqual(txt[0], [('shirai_kuroko', '99.974364'), ('misaka_imouto', '0.009442')])
+            self.assertEqual(txt[1], [('misaka_mikoto', '99.992931'), ('misaka_imouto', '0.006347')])
 
     def test_vit_face(self):
         testdir = osp.dirname(osp.realpath(__file__))
