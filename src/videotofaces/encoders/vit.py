@@ -1,5 +1,4 @@
 import os
-import os.path as osp
 
 import cv2
 import numpy as np
@@ -128,7 +127,7 @@ class ViT(nn.Module):
         x = x[:, 0]                                 # [bs, dim]
         x = self.norm(x)                            # [bs, dim]
         if hasattr(self, 'projection'):
-            x = self.projection(x) #x = x @ self.projection
+            x = self.projection(x)
         if not self.classes:
             return x
         y = self.fc(x)
@@ -158,55 +157,96 @@ class ViT(nn.Module):
 
 class VitClip():
     
+    # supporting weights from 2 sources, even though the numbers in them (and thus the produced results) are the same
+    # openai files are smaller because they are FP16, but huggingface should be more consistent with download speeds
     openai_base = 'https://openaipublic.azureedge.net/clip/models/'
     links = {
-        'B-32': openai_base + '40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt',
-        'B-16': openai_base + '5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f/ViT-B-16.pt',
-        'L-14': openai_base + 'b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836/ViT-L-14.pt',
+        'openai': {
+            'B-32': openai_base + '40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt',
+            'B-16': openai_base + '5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f/ViT-B-16.pt',
+            'L-14': openai_base + 'b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836/ViT-L-14.pt',
+        },
+        'huggingface': {
+            'B-32': 'https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/pytorch_model.bin',
+            'B-16': 'https://huggingface.co/openai/clip-vit-base-patch16/resolve/main/pytorch_model.bin',
+            'L-14': 'https://huggingface.co/openai/clip-vit-large-patch14/resolve/main/pytorch_model.bin',
+        }
     }
 
-    def convert_weights(self, wd_clip):
+    def convert_weights_openai(self, wd_clip):
         wl = []
         proj = None
         for nm in wd_clip:
-            if not nm.startswith('visual.'):
-                # ignoring the text part, we only ViT
-                continue
-            if 'attn.in_proj_weight' in nm:
-                # proj_k/q/v are joined into one in OG CLIP dict, we need separate
-                cb = nm.replace('_weight', '_bias')
-                ws = wd_clip[nm].chunk(3)
-                bs = wd_clip[cb].chunk(3)
-                for i in range(3):
-                    wl.append((nm, ws[i]))
-                    wl.append((cb, bs[i]))
-            elif 'attn.in_proj_bias' in nm:
-                # skipping bias since we did it above alongside main weights
-                continue
-            elif 'ln_1' in nm:
-                # norm 1 is after attention in OG CLIP dict, we need before
-                wl.insert(len(wl) - 8, (nm, wd_clip[nm]))
-            elif 'ln_2' in nm:
-                # norm 2 is after feedforward in OG CLIP dict, we need before
-                wl.insert(len(wl) - 4, (nm, wd_clip[nm]))
-            elif 'class_embedding' in nm:
-                wl.append((nm, wd_clip[nm].unsqueeze(0).unsqueeze(0)))
-            elif 'positional_embedding' in nm:
-                wl.append((nm, wd_clip[nm].unsqueeze(0)))
-            elif nm == 'visual.proj':
-                # projection weights are near the beginning, we need them last
-                proj = (nm, wd_clip[nm].transpose(1, 0))
-            else:
-                wl.append((nm, wd_clip[nm]))
+            if nm.startswith('visual.'): # ignoring the text part, we only need ViT
+                if 'attn.in_proj_weight' in nm:
+                    # proj_k/q/v are joined into one in OG CLIP dict, we need separate
+                    cb = nm.replace('_weight', '_bias')
+                    ws = wd_clip[nm].chunk(3)
+                    bs = wd_clip[cb].chunk(3)
+                    for i in range(3):
+                        wl.append((nm, ws[i]))
+                        wl.append((cb, bs[i]))
+                elif 'attn.in_proj_bias' in nm:
+                    # skipping bias since we did it above alongside main weights
+                    continue
+                elif 'ln_1' in nm:
+                    # norm 1 is after attention in OG CLIP dict, we need before
+                    wl.insert(len(wl) - 8, (nm, wd_clip[nm]))
+                elif 'ln_2' in nm:
+                    # norm 2 is after feedforward in OG CLIP dict, we need before
+                    wl.insert(len(wl) - 4, (nm, wd_clip[nm]))
+                elif 'class_embedding' in nm:
+                    wl.append((nm, wd_clip[nm].unsqueeze(0).unsqueeze(0)))
+                elif 'positional_embedding' in nm:
+                    wl.append((nm, wd_clip[nm].unsqueeze(0)))
+                elif nm == 'visual.proj':
+                    # projection weights are near the beginning, we need them last
+                    proj = (nm, wd_clip[nm].transpose(1, 0))
+                else:
+                    wl.append((nm, wd_clip[nm]))
         wl.append(proj)
         return wl
 
-    def __init__(self, device, typ):
-        assert typ in self.links
+    def convert_weights_hface(self, wd_clip):
+        wl = []
+        for nm in wd_clip:
+            if nm.startswith('vision_model.'):
+                if 'position_ids' in nm:
+                    # just have numbers from 1 to 50, doesn't seem to be necessary as weights
+                    continue
+                elif 'class_embedding' in nm:
+                    wl.append((nm, wd_clip[nm].unsqueeze(0).unsqueeze(0)))
+                elif 'position_embedding' in nm:
+                    # placed after patch_embedding, we need before
+                    wl.insert(len(wl) - 1, (nm, wd_clip[nm].unsqueeze(0)))
+                elif 'layer_norm1' in nm:
+                    # norm 1 is after attention, we need before
+                    wl.insert(len(wl) - 8, (nm, wd_clip[nm]))
+                elif 'layer_norm2' in nm or 'q_proj' in nm:
+                    # norm 2 is after feedforward, we need before
+                    wl.insert(len(wl) - 4, (nm, wd_clip[nm]))
+                elif 'q_proj' in nm:
+                    # this source have k, v, q; we need q, k, v
+                    wl.insert(len(wl) - 4, (nm, wd_clip[nm])) 
+                else:
+                    wl.append((nm, wd_clip[nm]))
+        proj_name = 'visual_projection.weight'
+        wl.append((proj_name, wd_clip[proj_name]))
+        return wl
+
+    def __init__(self, device, typ, src='openai'):
+        assert src in self.links
+        assert typ in self.links[src]
         print('Initializing ViT-%s model from CLIP' % typ)
-        wf = prep_weights_file(self.links[typ], osp.basename(self.links[typ]))
-        wd_clip = torch.jit.load(wf, map_location='cpu').eval().state_dict()
-        wl = self.convert_weights(wd_clip)
+        #fn_ending = 'OAI.pt' if src == 'openai' else 'HF.bin'
+        #wf = prep_weights_file(self.links[src][typ], 'ViT-%s-%s-%s' % (typ, src, fn_ending))
+        wf = prep_weights_file(self.links[src][typ], 'ViT-%s-%s.pt' % (typ, src))
+        if src == 'openai':
+            wd_clip = torch.jit.load(wf, map_location=torch.device(device)).eval().state_dict()
+            wl = self.convert_weights_openai(wd_clip)
+        else:
+            wd_clip = torch.load(wf, map_location=torch.device(device))
+            wl = self.convert_weights_hface(wd_clip)
         ps = int(typ.split('-')[1]) # patch size is contained in the name (e.g. 'L-14' => size=14)
         dim =  768 if typ != 'L-14' else 1024
         depth = 12 if typ != 'L-14' else 24
@@ -305,6 +345,7 @@ class VitEncoderAnime():
         depth = 12 if typ[0] != 'L' else 24
         self.model = ViT(128, 16, dim, depth, 1e-12, att_scale='per_head', classes=num_cls, loss='CE').to(device)
         weights = torch.load(wf, map_location=torch.device(device))
+        for w in weights: print(w, '\t', weights[w].shape)
         weights = dict((key.replace('model.', ''), value) for (key, value) in weights.items())
         weights['pos_embedding'] = weights.pop('positional_embedding.pos_embedding')
         if not classify:
