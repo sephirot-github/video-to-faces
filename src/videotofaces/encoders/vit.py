@@ -1,4 +1,5 @@
 import os
+import os.path as osp
 
 import cv2
 import numpy as np
@@ -6,7 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..utils import prep_weights_file
+from ..utils.weights import prep_weights_file, load_weights_from_list
+from ..utils.wconvert.w_vit import wconv_openai, wconv_hface, wconv_facetr, wconv_animesion, wconv_tv
 
 # adapted from
 # https://github.com/arkel23/animesion/tree/main/classification_tagging/models/vit_animesion
@@ -90,7 +92,7 @@ class ViT(nn.Module):
     
     def __init__(self, img_size, patch_size, dim, depth, eps=1e-05, stem='conv',
                  pre_norm=False, att_scale='total', gelu_type='exact', projection=None,
-                 classes=None, loss=None):
+                 classes=None):
         super().__init__()
         self.patch_size = patch_size
         self.classes = classes
@@ -106,10 +108,8 @@ class ViT(nn.Module):
         self.norm = nn.LayerNorm(dim, eps=eps)
         if projection is not None:
             self.projection = nn.Linear(dim, projection, bias=False) # nn.Parameter(torch.zeros(dim, projection))
-        if classes and loss == 'CE':
+        if classes:
             self.fc = nn.Linear(dim, classes)
-        elif classes and loss == 'CosFace':
-            self.loss = None
     
     def forward(self, x):
         if self.stem == 'conv':
@@ -155,6 +155,55 @@ class ViT(nn.Module):
         return x
 
 
+class VitTorchVision():
+
+    base = 'https://download.pytorch.org/models/'
+    links = {
+        'B-16-SWAG-E2E': base + 'vit_b_16_swag-9ac1b537.pth',
+    }
+
+    def __init__(self, device, typ):
+        assert typ in self.links
+        print('Initializing ViT-%s model from TorchVision' % typ)
+        wf = prep_weights_file(self.links[typ], 'ViT-%s.pth' % typ)
+        wd = torch.load(wf, map_location=torch.device(device))
+        wl = wconv_tv(wd)
+        ps = int(typ.split('-')[1])
+        #dim =  768 if typ != 'L-14' else 1024
+        #depth = 12 if typ != 'L-14' else 24
+        #proj = 512 if typ != 'L-14' else 768
+        self.model = ViT(img_size=384, patch_size=ps, dim=768, depth=12, eps=1e-6,
+                         att_scale='per_head', classes=1000).to(device)
+        self.model = load_weights_from_list(self.model, wl)
+        self.model.eval()
+        print()
+        
+    def __call__(self, imagesPIL):
+        from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, InterpolationMode
+        prep = Compose([Resize(384, interpolation=InterpolationMode.BICUBIC), CenterCrop(384), ToTensor(),
+                        Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),])
+        with torch.no_grad():
+            inp = torch.stack([prep(im) for im in imagesPIL])
+            out = self.model(inp)
+        if isinstance(out, tuple):
+            return (out[0].cpu().numpy(), out[1].cpu().numpy())
+        return out.cpu().numpy()
+
+    def get_predictions(self, probs, topk=5):
+        home = osp.dirname(osp.dirname(osp.realpath(__file__))) if '__file__' in globals() else os.getcwd()
+        # https://github.com/pytorch/vision/blob/main/torchvision/models/_meta.py#L7
+        clsf = osp.join(home, 'classes', 'imagenet1k.txt')
+        with open(clsf, encoding='utf-8') as f:
+            classes = [l for l in f.read().splitlines()]
+        res = []
+        for pb in probs:
+            # https://stackoverflow.com/a/38772601
+            idx = np.argpartition(pb, -topk)[-topk:]    # returns largest k unordered
+            idx = idx[np.argsort(pb[idx])[::-1]]        # makes them ordered
+            res.append([(classes[ind], pb[ind] * 100) for ind in idx])
+        return res
+
+
 class VitClip():
     
     # supporting weights from 2 sources, even though the numbers in them (and thus the produced results) are the same
@@ -173,91 +222,24 @@ class VitClip():
         }
     }
 
-    def convert_weights_openai(self, wd_clip):
-        wl = []
-        proj = None
-        for nm in wd_clip:
-            if nm.startswith('visual.'): # ignoring the text part, we only need ViT
-                if 'attn.in_proj_weight' in nm:
-                    # proj_k/q/v are joined into one in OG CLIP dict, we need separate
-                    cb = nm.replace('_weight', '_bias')
-                    ws = wd_clip[nm].chunk(3)
-                    bs = wd_clip[cb].chunk(3)
-                    for i in range(3):
-                        wl.append((nm, ws[i]))
-                        wl.append((cb, bs[i]))
-                elif 'attn.in_proj_bias' in nm:
-                    # skipping bias since we did it above alongside main weights
-                    continue
-                elif 'ln_1' in nm:
-                    # norm 1 is after attention in OG CLIP dict, we need before
-                    wl.insert(len(wl) - 8, (nm, wd_clip[nm]))
-                elif 'ln_2' in nm:
-                    # norm 2 is after feedforward in OG CLIP dict, we need before
-                    wl.insert(len(wl) - 4, (nm, wd_clip[nm]))
-                elif 'class_embedding' in nm:
-                    wl.append((nm, wd_clip[nm].unsqueeze(0).unsqueeze(0)))
-                elif 'positional_embedding' in nm:
-                    wl.append((nm, wd_clip[nm].unsqueeze(0)))
-                elif nm == 'visual.proj':
-                    # projection weights are near the beginning, we need them last
-                    proj = (nm, wd_clip[nm].transpose(1, 0))
-                else:
-                    wl.append((nm, wd_clip[nm]))
-        wl.append(proj)
-        return wl
-
-    def convert_weights_hface(self, wd_clip):
-        wl = []
-        for nm in wd_clip:
-            if nm.startswith('vision_model.'):
-                if 'position_ids' in nm:
-                    # just have numbers from 1 to 50, doesn't seem to be necessary as weights
-                    continue
-                elif 'class_embedding' in nm:
-                    wl.append((nm, wd_clip[nm].unsqueeze(0).unsqueeze(0)))
-                elif 'position_embedding' in nm:
-                    # placed after patch_embedding, we need before
-                    wl.insert(len(wl) - 1, (nm, wd_clip[nm].unsqueeze(0)))
-                elif 'layer_norm1' in nm:
-                    # norm 1 is after attention, we need before
-                    wl.insert(len(wl) - 8, (nm, wd_clip[nm]))
-                elif 'layer_norm2' in nm or 'q_proj' in nm:
-                    # norm 2 is after feedforward, we need before
-                    wl.insert(len(wl) - 4, (nm, wd_clip[nm]))
-                elif 'q_proj' in nm:
-                    # this source have k, v, q; we need q, k, v
-                    wl.insert(len(wl) - 4, (nm, wd_clip[nm])) 
-                else:
-                    wl.append((nm, wd_clip[nm]))
-        proj_name = 'visual_projection.weight'
-        wl.append((proj_name, wd_clip[proj_name]))
-        return wl
-
     def __init__(self, device, typ, src='openai'):
         assert src in self.links
         assert typ in self.links[src]
         print('Initializing ViT-%s model from CLIP' % typ)
-        #fn_ending = 'OAI.pt' if src == 'openai' else 'HF.bin'
-        #wf = prep_weights_file(self.links[src][typ], 'ViT-%s-%s-%s' % (typ, src, fn_ending))
         wf = prep_weights_file(self.links[src][typ], 'ViT-%s-%s.pt' % (typ, src))
         if src == 'openai':
             wd_clip = torch.jit.load(wf, map_location=torch.device(device)).eval().state_dict()
-            wl = self.convert_weights_openai(wd_clip)
+            wl = wconv_openai(wd_clip)
         else:
             wd_clip = torch.load(wf, map_location=torch.device(device))
-            wl = self.convert_weights_hface(wd_clip)
+            wl = wconv_hface(wd_clip)
         ps = int(typ.split('-')[1]) # patch size is contained in the name (e.g. 'L-14' => size=14)
         dim =  768 if typ != 'L-14' else 1024
         depth = 12 if typ != 'L-14' else 24
         proj = 512 if typ != 'L-14' else 768
         self.model = ViT(img_size=224, patch_size=ps, dim=dim, depth=depth,
                          pre_norm=True, att_scale='per_head', gelu_type='quick', projection=proj).to(device)
-        wd = {}
-        for i, w in enumerate(list(self.model.state_dict())):
-            #print(wl[i][0], ' to ', w)
-            wd[w] = wl[i][1]
-        self.model.load_state_dict(wd)
+        self.model = load_weights_from_list(self.model, wl)
         self.model.eval()
         print()
         
@@ -270,57 +252,6 @@ class VitClip():
             out = self.model(inp)
         return out.cpu().numpy()
 
-
-class VitEncoder():
-
-    def __init__(self, device, isP12S8, classify=False):
-        num_cls = None if not classify else 93431
-        if isP12S8:
-            print('Initializing ViT-P12S8 model for face feature extraction')
-            wf = prep_weights_file('https://drive.google.com/uc?id=1U7c_ojiuRPBfolvziB_VthksABHaFKud', 'Backbone_VITs_Epoch_2_Batch_12000_Time_2021-03-17-04-05_checkpoint.pth', gdrive=True)
-        else:
-            print('Initializing ViT-P8S8 model for face feature extraction')
-            wf = prep_weights_file('https://drive.google.com/uc?id=1OZRU430CjABSJtXU0oHZHlxgzXn6Gaqu', 'Backbone_VIT_Epoch_2_Batch_20000_Time_2021-01-12-16-48_checkpoint.pth', gdrive=True)
-    
-        self.model = ViT(img_size=112, patch_size=8, dim=512, depth=20, stem='linr_ov' if isP12S8 else 'linr', classes=num_cls).to(device)
-        weights = torch.load(wf, map_location=torch.device(device))
-
-        weights['class_token'] = weights.pop('cls_token')
-        weights['norm.weight'] = weights.pop('mlp_head.0.weight')
-        weights['norm.bias'] = weights.pop('mlp_head.0.bias')
-        weights['patch_embedding.weight'] = weights.pop('patch_to_embedding.weight')
-        weights['patch_embedding.bias'] = weights.pop('patch_to_embedding.bias')
-        for i in range(20):
-            weights['transformer.blocks.%u.norm1.weight' % i] = weights.pop('transformer.layers.%u.0.fn.norm.weight' % i)
-            weights['transformer.blocks.%u.norm1.bias' % i] = weights.pop('transformer.layers.%u.0.fn.norm.bias' % i)
-            weights['transformer.blocks.%u.norm2.weight' % i] = weights.pop('transformer.layers.%u.1.fn.norm.weight' % i)
-            weights['transformer.blocks.%u.norm2.bias' % i] = weights.pop('transformer.layers.%u.1.fn.norm.bias' % i)
-            weights['transformer.blocks.%u.proj.weight' % i] = weights.pop('transformer.layers.%u.0.fn.fn.to_out.0.weight' % i)
-            weights['transformer.blocks.%u.proj.bias' % i] = weights.pop('transformer.layers.%u.0.fn.fn.to_out.0.bias' % i)
-            weights['transformer.blocks.%u.pwff.fc1.weight' % i] = weights.pop('transformer.layers.%u.1.fn.fn.net.0.weight' % i)
-            weights['transformer.blocks.%u.pwff.fc1.bias' % i] = weights.pop('transformer.layers.%u.1.fn.fn.net.0.bias' % i)
-            weights['transformer.blocks.%u.pwff.fc2.weight' % i] = weights.pop('transformer.layers.%u.1.fn.fn.net.3.weight' % i)
-            weights['transformer.blocks.%u.pwff.fc2.bias' % i] = weights.pop('transformer.layers.%u.1.fn.fn.net.3.bias' % i)
-            qkv = weights.pop('transformer.layers.%u.0.fn.fn.to_qkv.weight' % i).chunk(3)
-            weights['transformer.blocks.%u.attn.proj_q.weight' % i] = qkv[0]
-            weights['transformer.blocks.%u.attn.proj_k.weight' % i] = qkv[1]
-            weights['transformer.blocks.%u.attn.proj_v.weight' % i] = qkv[2]
-            weights['transformer.blocks.%u.attn.proj_q.bias' % i] = torch.zeros(512)
-            weights['transformer.blocks.%u.attn.proj_k.bias' % i] = torch.zeros(512)
-            weights['transformer.blocks.%u.attn.proj_v.bias' % i] = torch.zeros(512)
-        if not classify:
-            weights.pop('loss.weight')
-        self.model.load_state_dict(weights)
-        self.model.eval()
-        print()
-    
-    def __call__(self, images):
-        inp = cv2.dnn.blobFromImages(images, 1, (112, 112), (0, 0, 0), swapRB=True)
-        inp = torch.from_numpy(inp)
-        with torch.no_grad():
-            out = self.model(inp)
-        return out.cpu().numpy()
-        
     
 class VitEncoderAnime():
 
@@ -345,13 +276,8 @@ class VitEncoderAnime():
         depth = 12 if typ[0] != 'L' else 24
         self.model = ViT(128, 16, dim, depth, 1e-12, att_scale='per_head', classes=num_cls, loss='CE').to(device)
         weights = torch.load(wf, map_location=torch.device(device))
-        for w in weights: print(w, '\t', weights[w].shape)
-        weights = dict((key.replace('model.', ''), value) for (key, value) in weights.items())
-        weights['pos_embedding'] = weights.pop('positional_embedding.pos_embedding')
-        if not classify:
-            weights.pop('fc.weight')
-            weights.pop('fc.bias')
-        self.model.load_state_dict(weights)
+        wl = wconv_animesion(weights, classify)
+        self.model = load_weights_from_list(self.model, wl)
         self.model.eval()
         print()
         
@@ -378,3 +304,29 @@ class VitEncoderAnime():
             idx = idx[np.argsort(pb[idx])[::-1]]        # makes them ordered
             res.append([(classes[ind], pb[ind] * 100) for ind in idx])
         return res
+
+
+class VitEncoder():
+
+    def __init__(self, device, isP12S8, classify=False):
+        num_cls = None if not classify else 93431
+        if isP12S8:
+            print('Initializing ViT-P12S8 model for face feature extraction')
+            wf = prep_weights_file('https://drive.google.com/uc?id=1U7c_ojiuRPBfolvziB_VthksABHaFKud', 'Backbone_VITs_Epoch_2_Batch_12000_Time_2021-03-17-04-05_checkpoint.pth', gdrive=True)
+        else:
+            print('Initializing ViT-P8S8 model for face feature extraction')
+            wf = prep_weights_file('https://drive.google.com/uc?id=1OZRU430CjABSJtXU0oHZHlxgzXn6Gaqu', 'Backbone_VIT_Epoch_2_Batch_20000_Time_2021-01-12-16-48_checkpoint.pth', gdrive=True)
+    
+        self.model = ViT(img_size=112, patch_size=8, dim=512, depth=20, stem='linr_ov' if isP12S8 else 'linr', classes=num_cls).to(device)
+        weights = torch.load(wf, map_location=torch.device(device))
+        wl = wconv_facetr(weights, classify)
+        self.model = load_weights_from_list(self.model, wl)
+        self.model.eval()
+        print()
+    
+    def __call__(self, images):
+        inp = cv2.dnn.blobFromImages(images, 1, (112, 112), (0, 0, 0), swapRB=True)
+        inp = torch.from_numpy(inp)
+        with torch.no_grad():
+            out = self.model(inp)
+        return out.cpu().numpy()

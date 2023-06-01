@@ -20,6 +20,16 @@ def prep_weights_file(url, fn, gdrive=False):
     return dst
 
 
+def load_weights_from_list(model, wl, print_log=False):
+    wd = {}
+    for i, w in enumerate(list(model.state_dict())):
+        if print_log:
+            print(wl[i][0], ' to ', w)
+        wd[w] = wl[i][1]
+    model.load_state_dict(wd)
+    return model
+
+
 def load_weights(model, link, suffix, device, extra_conversion=None, sub=None, add_num_batches=False):
     """"""
     link = link if '://' in link else 'https://drive.google.com/uc?id=%s' % link

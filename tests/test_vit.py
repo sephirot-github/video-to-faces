@@ -40,6 +40,12 @@ class TestVIT(unittest.TestCase):
             txt = [[(nm, '%.6f' % pb) for nm, pb in group[:2]] for group in pred]
             self.assertEqual(txt[0], [('shirai_kuroko', '99.974364'), ('misaka_imouto', '0.009442')])
             self.assertEqual(txt[1], [('misaka_mikoto', '99.992931'), ('misaka_imouto', '0.006347')])
+            model = VitEncoderAnime('cpu', 'B-16-Danbooru-Full', classify=True)
+            prob, _ = model(imgs)
+            pred = model.get_predictions(prob)
+            txt = [[(nm, '%.6f' % pb) for nm, pb in group[:2]] for group in pred]
+            self.assertEqual(txt[0], [('shirai_kuroko', '96.670747'), ('sakura_kyouko', '1.815796')])
+            self.assertEqual(txt[1], [('misaka_mikoto', '99.946982'), ('misaka_imouto', '0.045370')])
 
     def test_vit_face(self):
         testdir = osp.dirname(osp.realpath(__file__))
