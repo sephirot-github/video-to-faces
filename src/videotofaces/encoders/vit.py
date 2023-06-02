@@ -160,21 +160,22 @@ class VitTorchVision():
     base = 'https://download.pytorch.org/models/'
     links = {
         'B-16': base + 'vit_b_16_swag-9ac1b537.pth',
-        'H-14': base + 'vit_h_14_swag-80465313.pth',
+        'L-16': base + 'vit_l_16_swag-4f3808c9.pth',
     }
 
-    def __init__(self, device, typ):
+    def __init__(self, device, typ, classify=False):
         assert typ in self.links
         print('Initializing ViT-%s model from TorchVision' % typ)
         wf = prep_weights_file(self.links[typ], 'ViT-%s-TorchVision.pth' % typ)
         wd = torch.load(wf, map_location=torch.device(device))
-        wl = wconv_tv(wd)
+        wl = wconv_tv(wd, classify)
         ps = int(typ.split('-')[1])
-        imsz = 384 if typ != 'H-14' else 518
-        dim =  768 if typ != 'H-14' else 1280
-        depth = 12 if typ != 'H-14' else 32
+        imsz = 384 if typ[0] != 'L' else 512 #518
+        dim =  768 if typ[0] != 'L' else 1024 #1280
+        depth = 12 if typ[0] != 'L' else 24 #32
+        ncls = None if not classify else 1000
         self.model = ViT(img_size=imsz, patch_size=ps, dim=dim, depth=depth, eps=1e-6,
-                         att_scale='per_head', classes=1000).to(device)
+                         att_scale='per_head', classes=ncls).to(device)
         self.model = load_weights_from_list(self.model, wl)
         self.model.eval()
         print()
@@ -186,7 +187,7 @@ class VitTorchVision():
                                ToTensor(), Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),])
         with torch.no_grad():
             dv = next(self.model.parameters()).device
-            inp = torch.stack([prep(im).to(dv) for im in imagesPIL])
+            inp = torch.stack([prep(im) for im in imagesPIL]).to(dv)
             out = self.model(inp)
         if isinstance(out, tuple):
             return (out[0].cpu().numpy(), out[1].cpu().numpy())
@@ -252,7 +253,7 @@ class VitClip():
                         Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),])
         with torch.no_grad():
             dv = next(self.model.parameters()).device
-            inp = torch.stack([prep(im).to(dv) for im in imagesPIL])
+            inp = torch.stack([prep(im) for im in imagesPIL]).to(dv)
             out = self.model(inp)
         return out.cpu().numpy()
 

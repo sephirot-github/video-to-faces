@@ -17,7 +17,7 @@ def wconv_animesion(src, classify):
             wl.append((nm, src[nm]))
     return wl
 
-def wconv_tv(src):
+def wconv_tv(src, classify):
     wl = []
     for nm in src:
         if nm == 'encoder.pos_embedding':
@@ -30,6 +30,8 @@ def wconv_tv(src):
                     wl.append((nm, ws[i]))
                     wl.append((cb, bs[i]))
         elif 'in_proj_bias' in nm:
+            continue
+        elif not classify and 'heads.head' in nm:
             continue
         else:
             wl.append((nm, src[nm]))
