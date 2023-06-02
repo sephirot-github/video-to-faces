@@ -159,31 +159,34 @@ class VitTorchVision():
 
     base = 'https://download.pytorch.org/models/'
     links = {
-        'B-16-SWAG-E2E': base + 'vit_b_16_swag-9ac1b537.pth',
+        'B-16': base + 'vit_b_16_swag-9ac1b537.pth',
+        'H-14': base + 'vit_h_14_swag-80465313.pth',
     }
 
     def __init__(self, device, typ):
         assert typ in self.links
         print('Initializing ViT-%s model from TorchVision' % typ)
-        wf = prep_weights_file(self.links[typ], 'ViT-%s.pth' % typ)
+        wf = prep_weights_file(self.links[typ], 'ViT-%s-TorchVision.pth' % typ)
         wd = torch.load(wf, map_location=torch.device(device))
         wl = wconv_tv(wd)
         ps = int(typ.split('-')[1])
-        #dim =  768 if typ != 'L-14' else 1024
-        #depth = 12 if typ != 'L-14' else 24
-        #proj = 512 if typ != 'L-14' else 768
-        self.model = ViT(img_size=384, patch_size=ps, dim=768, depth=12, eps=1e-6,
+        imsz = 384 if typ != 'H-14' else 518
+        dim =  768 if typ != 'H-14' else 1280
+        depth = 12 if typ != 'H-14' else 32
+        self.model = ViT(img_size=imsz, patch_size=ps, dim=dim, depth=depth, eps=1e-6,
                          att_scale='per_head', classes=1000).to(device)
         self.model = load_weights_from_list(self.model, wl)
         self.model.eval()
         print()
+        self.imsz = imsz
         
     def __call__(self, imagesPIL):
         from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, InterpolationMode
-        prep = Compose([Resize(384, interpolation=InterpolationMode.BICUBIC), CenterCrop(384), ToTensor(),
-                        Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),])
+        prep = Compose([Resize(self.imsz, interpolation=InterpolationMode.BICUBIC), CenterCrop(self.imsz),
+                               ToTensor(), Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),])
         with torch.no_grad():
-            inp = torch.stack([prep(im) for im in imagesPIL])
+            dv = next(self.model.parameters()).device
+            inp = torch.stack([prep(im).to(dv) for im in imagesPIL])
             out = self.model(inp)
         if isinstance(out, tuple):
             return (out[0].cpu().numpy(), out[1].cpu().numpy())
@@ -248,7 +251,8 @@ class VitClip():
         prep = Compose([Resize(224, interpolation=InterpolationMode.BICUBIC), CenterCrop(224), ToTensor(),
                         Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),])
         with torch.no_grad():
-            inp = torch.stack([prep(im) for im in imagesPIL])
+            dv = next(self.model.parameters()).device
+            inp = torch.stack([prep(im).to(dv) for im in imagesPIL])
             out = self.model(inp)
         return out.cpu().numpy()
 
@@ -274,7 +278,7 @@ class VitEncoderAnime():
         wf = prep_weights_file('https://drive.google.com/uc?id=%s' % self.gids[typ], 'ViT-%s.ckpt' % typ)
         dim =  768 if typ[0] != 'L' else 1024
         depth = 12 if typ[0] != 'L' else 24
-        self.model = ViT(128, 16, dim, depth, 1e-12, att_scale='per_head', classes=num_cls, loss='CE').to(device)
+        self.model = ViT(128, 16, dim, depth, 1e-12, att_scale='per_head', classes=num_cls).to(device)
         weights = torch.load(wf, map_location=torch.device(device))
         wl = wconv_animesion(weights, classify)
         self.model = load_weights_from_list(self.model, wl)
@@ -283,7 +287,7 @@ class VitEncoderAnime():
         
     def __call__(self, images):
         inp = cv2.dnn.blobFromImages(images, 1 / 127.5, (128, 128), (127.5, 127.5, 127.5), swapRB=True)
-        inp = torch.from_numpy(inp)
+        inp = torch.from_numpy(inp).to(next(self.model.parameters()).device)
         with torch.no_grad():
             out = self.model(inp)
         if isinstance(out, tuple):

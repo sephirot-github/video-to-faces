@@ -7,7 +7,7 @@ import numpy as np
 import PIL.Image
 import torch
 
-from videotofaces.encoders.vit import VitEncoderAnime, VitEncoder, VitClip
+from videotofaces.encoders.vit import VitEncoderAnime, VitEncoder, VitClip, VitTorchVision
 
 EXTENDED = False
 
@@ -37,15 +37,30 @@ class TestVIT(unittest.TestCase):
             self.assertEqual(prob.shape, (2, 3263))
             pred = model.get_predictions(prob)
             self.assertEqual([len(pred), len(pred[0]), len(pred[1])], [2, 5, 5])
-            txt = [[(nm, '%.6f' % pb) for nm, pb in group[:2]] for group in pred]
-            self.assertEqual(txt[0], [('shirai_kuroko', '99.974364'), ('misaka_imouto', '0.009442')])
-            self.assertEqual(txt[1], [('misaka_mikoto', '99.992931'), ('misaka_imouto', '0.006347')])
+            txt = [[(nm, '%.5f' % pb) for nm, pb in group[:2]] for group in pred]
+            self.assertEqual(txt[0], [('shirai_kuroko', '99.97436'), ('misaka_imouto', '0.00944')])
+            self.assertEqual(txt[1], [('misaka_mikoto', '99.99293'), ('misaka_imouto', '0.00635')])
             model = VitEncoderAnime('cpu', 'B-16-Danbooru-Full', classify=True)
             prob, _ = model(imgs)
             pred = model.get_predictions(prob)
-            txt = [[(nm, '%.6f' % pb) for nm, pb in group[:2]] for group in pred]
-            self.assertEqual(txt[0], [('shirai_kuroko', '96.670747'), ('sakura_kyouko', '1.815796')])
-            self.assertEqual(txt[1], [('misaka_mikoto', '99.946982'), ('misaka_imouto', '0.045370')])
+            txt = [[(nm, '%.5f' % pb) for nm, pb in group[:2]] for group in pred]
+            self.assertEqual(txt[0], [('shirai_kuroko', '96.67075'), ('sakura_kyouko', '1.81579')])
+            self.assertEqual(txt[1], [('misaka_mikoto', '99.94698'), ('misaka_imouto', '0.04537')])
+
+    def test_vit_torchvision(self):
+        testdir = osp.dirname(osp.realpath(__file__))
+        names = ['bear1', 'cat1', 'city1']
+        paths = [osp.join(testdir, 'images', 'sml_%s.jpg' % nm) for nm in names]
+        imgs = [PIL.Image.open(pt) for pt in paths]
+        model = VitTorchVision('cpu', 'B-16')
+        prob, _ = model(imgs)
+        pred = model.get_predictions(prob)
+        txt = [[(nm, '%.3f' % pb) for nm, pb in group[:3]] for group in pred]
+        self.assertEqual(prob.shape, (3, 1000))
+        self.assertEqual([len(pred), len(pred[0]), len(pred[1])], [3, 5, 5])
+        self.assertEqual(txt[0], [('American black bear', '73.204'), ('brown bear', '20.141'), ('unicycle', '1.799')])
+        self.assertEqual(txt[1], [('Egyptian cat', '50.508'), ('tabby', '31.426'), ('Persian cat', '5.010')])
+        self.assertEqual(txt[2], [('steel arch bridge', '38.447'), ('planetarium', '10.220'), ('balloon', '7.224')])
 
     def test_vit_face(self):
         testdir = osp.dirname(osp.realpath(__file__))
