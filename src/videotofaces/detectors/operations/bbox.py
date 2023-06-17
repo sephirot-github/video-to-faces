@@ -59,8 +59,9 @@ def convert_to_xyxy(boxes, in_place=False):
 
 
 def clamp_to_canvas(boxes, imsizes, imidx):
-    mx = torch.tensor(imsizes).flip(1).repeat(1, 2)[imidx, :]
-    boxes.clamp_(min=torch.tensor(0), max=mx)
+    dv = imidx.device
+    mx = torch.tensor(imsizes).to(dv).flip(1).repeat(1, 2)[imidx, :]
+    boxes.clamp_(min=torch.tensor(0).to(dv), max=mx)
     return boxes
 
 
@@ -77,7 +78,7 @@ def remove_small(boxes, min_size, *args):
 
 def scale_boxes(boxes, target_imsizes, current_imsizes):
     scales = torch.tensor(target_imsizes) / torch.tensor(current_imsizes)
-    scales = scales.flip(1).repeat(1, 2)
+    scales = scales.to(boxes[0].device).flip(1).repeat(1, 2)
     boxes = [boxes[i] * scales[i] for i in range(len(boxes))]
     return boxes
 

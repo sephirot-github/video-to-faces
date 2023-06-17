@@ -46,7 +46,7 @@ def get_lvidx(idx, lvsizes):
     cumsum = tensor([3500, 6000, 7000, 7600, 8000])
     idx % dim = tensor([   0, 5999, 6000, 7999,    0, 7000, 4000])
     """
-    boundaries = torch.tensor(lvsizes).cumsum(0)
+    boundaries = torch.tensor(lvsizes).to(idx.device).cumsum(0)
     return torch.bucketize(idx, boundaries, right=True)
     #return torch.gt(boundaries, idx[:, None]).to(dtype=int).argmax(dim=1)
 

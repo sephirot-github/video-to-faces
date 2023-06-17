@@ -24,7 +24,7 @@ def roi_align_multilevel(boxes, imidx, fmaps, strides, settings):
     sratio, aligned = settings
     mapidx = assign_fpn_levels(boxes, strides)
     imboxes = torch.hstack([imidx.unsqueeze(-1), boxes])
-    roi_maps = torch.zeros((len(mapidx), fmaps[0].shape[1], 7, 7))
+    roi_maps = torch.zeros((len(mapidx), fmaps[0].shape[1], 7, 7)).to(boxes.device)
     for level in range(len(strides)):
         scale = 1 / strides[level]
         idx = torch.nonzero(mapidx == level).squeeze()
