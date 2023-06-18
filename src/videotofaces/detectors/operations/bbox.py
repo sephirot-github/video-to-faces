@@ -66,6 +66,7 @@ def clamp_to_canvas(boxes, imsizes, imidx):
 
 
 def remove_small(boxes, min_size, *args):
+    boxes = boxes.view(-1, 4)
     ws = boxes[:, 2] - boxes[:, 0]
     hs = boxes[:, 3] - boxes[:, 1]
     mask = (ws > min_size) & (hs > min_size)
@@ -73,7 +74,7 @@ def remove_small(boxes, min_size, *args):
     if torch.count_nonzero(mask) < boxes.shape[0]:
         boxes = boxes[mask]
         args = [t[mask] if (t is not None) else None for t in args]
-    return [boxes, *args]
+    return [boxes.squeeze(), *args]
 
 
 def scale_boxes(boxes, target_imsizes, current_imsizes):

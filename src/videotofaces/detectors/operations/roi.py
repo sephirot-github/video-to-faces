@@ -28,6 +28,6 @@ def roi_align_multilevel(boxes, imidx, fmaps, strides, settings):
     for level in range(len(strides)):
         scale = 1 / strides[level]
         idx = torch.nonzero(mapidx == level).squeeze()
-        roi = torchvision.ops.roi_align(fmaps[level], imboxes[idx], (7, 7), scale, sratio, aligned)
+        roi = torchvision.ops.roi_align(fmaps[level], imboxes[idx].view(-1, 5), (7, 7), scale, sratio, aligned)
         roi_maps[idx] = roi.to(roi_maps.dtype)
     return roi_maps
