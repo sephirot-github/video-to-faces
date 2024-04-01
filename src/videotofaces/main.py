@@ -15,14 +15,14 @@ def video_to_faces(input_path=None, input_ext=None,
                    out_dir=None, out_prefix='', resize_to=None,
                    save_frames=False, save_rejects=False, save_dupes=False,
                    video_step=1, video_fragment=None, video_area=None, video_reader='opencv',
-                   det_model='rcnn', det_batch_size=32, det_min_score=0.6, det_min_size=100,
+                   det_model='rcnn', det_batch_size=4, det_min_score=0.4, det_min_size=50,
                    det_min_border=5, det_scale=(1.5, 1.5, 2.2, 1.2), det_square=True,
                    hash_thr=8,
-                   enc_model='vit_l', enc_batch_size=128, enc_area=None,
+                   enc_model='vit_b', enc_batch_size=16, enc_area=None,
                    group_mode='clustering', clusters=None, clusters_save_all=False,
                    ref_dir=None, random_state=0, group_log=True,
                    enc_dup_thr=0.5, enc_oth_thr=1.5,
-                   test_enc=False, _test_exclude_other=False):
+                   _test_enc=False, _test_exclude_other=False):
     """TBD"""
     valid = validate_args(mode, input_path, out_dir, style, group_mode, video_reader)
     if not valid:

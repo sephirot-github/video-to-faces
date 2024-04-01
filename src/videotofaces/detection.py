@@ -13,12 +13,13 @@ except ImportError:
 from .utils.pbar import tqdm
 from .utils.image import resize_keep_ratio
 from .dupes import ahash, remove_dupes_nearest, remove_dupes_overall
-from .detectors.rcnn import Detector_Anime_FasterRCNN
+
+from .detectors.rcnn import AnimeFRCNN
 
 
 def get_detector_model(style, det_model, device):
-    if style == 'anime' and det_model == 'rcnn':
-        return Detector_Anime_FasterRCNN(device)
+    if style == 'anime':
+        return AnimeFRCNN(device)
     return 0
     
     

@@ -1,3 +1,4 @@
+import math
 import os
 import os.path as osp
 import shutil
@@ -10,35 +11,22 @@ import sklearn.cluster
 from .utils.pbar import tqdm
 from .utils.image import crop_to_area
 from .dupes import remove_dupes_overall
-#from .encoders import MobileFaceNetEncoder, IncepResEncoder, IResNetEncoder
-#from .encoders import VitEncoderAnime
+
+from .encoders.vit import AnimeVIT
+
 
 def get_encoder_model(style, enc_model, device):
+    if style == 'anime':
+        isL = enc_model[-1] == 'l'
+        return AnimeVIT(device, isL)
     return 0
-    #s = enc_model.split(':')
-    #if style == 'anime':
-    #    return VitEncoderAnime(device, enc_model == 'vit_l')
-    #elif style == 'live':
-    #    if enc_model.startswith('mbf'):
-    #        source = 'insightface' if len(s) == 1 else s[1]
-    #        return MobileFaceNetEncoder(device, src=source)
-    #    elif enc_model.startswith('facenet'):
-    #        source = 'vggface2' if len(s) == 1 else s[1]
-    #        return IncepResEncoder(device, dataset=source)
-    #    elif enc_model.startswith('iresnet'):
-    ##        return IResNetEncoder(device, s[1])
-        # TEST
-    #    elif enc_model == 'onnx_iresnet':
-    #        from .encoders.iresnet import ONNXIResNetEncoder
-    #        return ONNXIResNetEncoder(device)
 
 
 def encode_faces(paths, model, bs, area):
-    """TBD"""
     print('Extracting features from images for grouping')
     x = []
     with tqdm(total=len(paths)) as pbar:
-        for bn in range(len(paths) // bs + 1):
+        for bn in range(math.ceil(len(paths) / bs)):
             images = [cv2.imread(p) for p in paths[bs*bn:bs*(bn+1)]]
             if area:
                 images = [crop_to_area(img, area) for img in images]
@@ -49,7 +37,6 @@ def encode_faces(paths, model, bs, area):
 
 
 def encode_refs(refs, model):
-    """TBD"""
     rpaths = [ps[0] for (_, ps) in refs]
     rimages = [cv2.imread(p) for p in rpaths]
     r = model(rimages)
@@ -57,7 +44,6 @@ def encode_refs(refs, model):
 
     
 def classify(X, R, classes, thr, log, paths, out_dir):
-    """TBD"""
     dist = sklearn.metrics.pairwise_distances(X, R, metric='euclidean')
     # above is = np.linalg.norm(X[:, None] - R, axis=-1) but faster and uses less memory
     inds = dist.argmin(axis=1)
@@ -69,14 +55,15 @@ def classify(X, R, classes, thr, log, paths, out_dir):
         fnames = [osp.basename(p) for p in paths]
         with open(osp.join(out_dir, 'log_classification.csv'), 'w') as f:
             extra = '(other_threshold=%s)' % str(thr) if thr else ''
-            f.write('file_name,' + ','.join(['dist_' + c for c in classes if c != 'other']) + ',assigned_to_class' + extra + '\n')
+            f.write('file_name,' + ','.join(['dist_' + c for c in classes if c != 'other']) +
+                    ',assigned_to_class' + extra + '\n')
             for i in range(X.shape[0]):
-                f.write('%s,' % fnames[i] + ','.join(['%.4f' % d for d in dist[i]]) + ',%s\n' % classes[inds[i]])
+                f.write('%s,' % fnames[i] + ','.join(['%.4f' % d for d in dist[i]]) +
+                        ',%s\n' % classes[inds[i]])
     return inds, classes
 
 
 def classify_faces(paths, X, model, classif_params):
-    """TBD"""
     refs, thr, log, out_dir = classif_params
     classes = [c for (c, _) in refs]
     print('Found %u classes in ref_dir: %s' % (len(classes), ', '.join(classes)))
@@ -100,7 +87,6 @@ def classify_faces(paths, X, model, classif_params):
 
 
 def cluster_faces(paths, X, cluster_params):
-    """TBD"""
     clusters, save_all, rstate, log, out_dir = cluster_params
     # leaving only n_clusters <= number of samples (most likely will be all for non-test cases)
     clusters = [c for c in clusters if c <= len(paths)]
@@ -108,7 +94,7 @@ def cluster_faces(paths, X, cluster_params):
     print('Clustering images into %s groups' % ', '.join([str(cl) for cl in clusters]))
     labels = []
     for k in clusters:
-        cm = sklearn.cluster.KMeans(n_clusters=k, random_state=rstate).fit(X)
+        cm = sklearn.cluster.KMeans(n_clusters=k, random_state=rstate, n_init='auto').fit(X)
         labels.append(cm.labels_)
 
     scores = []
@@ -138,18 +124,17 @@ def cluster_faces(paths, X, cluster_params):
         for j in range(k):
             os.makedirs(osp.join(img_dir, sub, str(j)), exist_ok=True)
         for j in range(len(paths)):
-            fn = osp.basename(paths[i])
+            fn = osp.basename(paths[j])
             lb = str(labels[i][j])
-            shutil.copyfile(paths[i], osp.join(img_dir, sub, lb, fn))
+            shutil.copyfile(paths[j], osp.join(img_dir, sub, lb, fn))
         values, counts = np.unique(labels[i], return_counts=True)
         print((sub + ': ' if sub else '') + ', '.join(['%u: %u' % (v, c) for v, c in zip(values, counts)]))
     print()
-    for p in paths:
-        os.remove(paths)
+    #for p in paths:
+    #    os.remove(p)
 
 
 def test_grouping(paths, refs, test_params):
-    """TBD"""
     style, mname, device, out_dir, exclude_other, bs, area, thr, rstate = test_params
     gt, paths, n_clusters = get_ground_truths(paths, out_dir, exclude_other)
     model = get_encoder_model(style, mname, device)
@@ -168,12 +153,12 @@ def test_grouping(paths, refs, test_params):
 
     
 def get_ground_truths(paths, out_dir, exclude_other):
-    """TBD"""
     try:
         with open(osp.join(out_dir, 'labels.txt')) as f:
             gt = np.asarray([int(x) for x in f.read().splitlines()])
     except:
-        raise ValueError('Could not load ground truth labels for testing. Expecting file "labels.txt" inside out_dir, filled with line-separated integers')
+        raise ValueError('Could not load ground truth labels for testing.'\
+                         'Expecting file "labels.txt" inside out_dir, filled with line-separated integers')
     if exclude_other:
         other_class = max(gt)
         other_count = np.count_nonzero(gt == other_class)

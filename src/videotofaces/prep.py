@@ -5,12 +5,10 @@ IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tif
 
 
 def get_img_paths(target_dir):
-    """TBD"""
     return sorted([e.path for e in os.scandir(target_dir) if e.is_file() and e.name.lower().endswith(IMG_EXTENSIONS)])
 
 
 def check_limited_option(val, arg_name, possible_vals):
-    """TBD"""
     if val not in possible_vals:
         print('ERROR: unknown %s. Available options are %s' % (arg_name, ', '.join(['"' + v + '"' for v in possible_vals])))
         return False
@@ -18,7 +16,6 @@ def check_limited_option(val, arg_name, possible_vals):
 
 
 def validate_args(mode, input_path, out_dir, style, group_mode, video_reader):
-    """TBD"""
     if not check_limited_option(mode, 'mode', ['full', 'detection', 'grouping']):
         return False
     
@@ -43,7 +40,6 @@ def validate_args(mode, input_path, out_dir, style, group_mode, video_reader):
     
     
 def get_clusters(c):
-    """TBD"""
     if not c:
         return list(range(2, 9))
     if isinstance(c, int) and c > 0:
@@ -61,7 +57,6 @@ def get_clusters(c):
 
 
 def get_class_ref(ref_dir, out_dir):
-    """TBD"""
     explanation = 'Please prepare a directory with 1 or more subfolders representing groups, each with 1 or more reference images inside'
     if not ref_dir:
         tdir = osp.join(out_dir, 'ref')
@@ -101,7 +96,6 @@ def get_class_ref(ref_dir, out_dir):
     
     
 def get_paths_for_grouping(out_dir):
-    """TBD"""
     # try a subfolder named "faces" first, according to how we structure output files during detection
     # but if it doesn't exist, fall back to searching images inside out_dir directly
     tdir = osp.join(out_dir, 'faces')
@@ -117,7 +111,6 @@ def get_paths_for_grouping(out_dir):
     
     
 def get_video_list(input, ext):
-    """TBD"""
     # if input is a .txt file, read it and return lines that are valid file paths
     if osp.isfile(input) and input.lower().endswith('.txt'):
         with open(input) as f:

@@ -10,7 +10,6 @@ from ..backbones.resnet import ResNet50
 from .components.fpn import FeaturePyramidNetwork
 from .operations.anchor import get_priors, make_anchors
 from .operations.bbox import clamp_to_canvas, convert_to_cwh, decode_boxes, remove_small, scale_boxes
-from .operations.loss import calc_losses, get_losses, match_with_targets
 from .operations.post import get_lvidx, final_nms
 from .operations.prep import preprocess, prep_targets
 from .operations.roi import roi_align_multilevel
@@ -171,7 +170,7 @@ class FasterRCNN(nn.Module):
         return b, s, c
 
 
-class Detector_Anime_FasterRCNN():
+class AnimeFRCNN():
 
     link = 'https://github.com/hysts/anime-face-detector/'\
            'releases/download/v0.0.1/mmdet_anime-face_faster-rcnn.pth'
