@@ -4,11 +4,12 @@ import torch.nn as nn
 
 class ConvUnit(nn.Module):
 
-    def __init__(self, cin, cout, k, s, p, activ, bn=1e-05, grp=1, d=1):
+    def __init__(self, cin, cout, k, s, p, activ, bn=1e-05, grp=1, d=1, cbias_explicit=None):
         super().__init__()
 
         cin, cout, grp = int(cin), int(cout), int(grp)
-        self.conv = nn.Conv2d(cin, cout, k, s, p, groups=grp, bias=bn is None, dilation=d)
+        cb = cbias_explicit or (bn is None)
+        self.conv = nn.Conv2d(cin, cout, k, s, p, groups=grp, bias=cb, dilation=d)
         
         if bn == None:
             self.bn = None

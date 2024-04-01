@@ -5,9 +5,8 @@ import torch.nn as nn
 
 from .basic import ConvUnit, BaseMultiReturn
 
+
 # https://github.com/pytorch/vision/blob/main/torchvision/models/resnet.py
-# return _resnet(Bottleneck, [3, 4, 6, 3], weights, progress, **kwargs)
-# return _resnet(Bottleneck, [3, 8, 36, 3], weights, progress, **kwargs)
 
 class Bottleneck(nn.Module):
 
@@ -52,7 +51,5 @@ class ResNet(BaseMultiReturn):
             super().freeze(num_freeze)
 
 
-#def ResNet50(retidx, bn=1e-05):  return ResNet([3, 4, 6, 3], retidx, bn)
-#def ResNet152(retidx, bn=1e-05): return ResNet([3, 8, 36, 3], retidx, bn)
 ResNet50 = partial(ResNet, block_counts=[3, 4, 6, 3])
 ResNet152 = partial(ResNet, block_counts=[3, 8, 36, 3])

@@ -6,10 +6,10 @@ except ImportError:
         from tqdm import tqdm
     except ImportError:
         class tqdm(object):
-            '''a simpler placeholder that prints progress on the same line, in case tqdm is not installed
-               (since, a light and common install as it is, it might not be very nice to add a hard 3rd party dependency purely for visual pleasantries)
-               adapted from https://github.com/timesler/facenet-pytorch/blob/v2.4.1/models/utils/download.py
-               will print progress in MB for file downloads and just in iterations for everything else'''
+            """A simpler placeholder that prints progress on the same line, in case tqdm is not installed.
+            Adapted from https://github.com/timesler/facenet-pytorch/blob/v2.4.1/models/utils/download.py
+            Will print progress in MB for file downloads and just in iterations for everything else.
+            """
             def __init__(self, total=None, unit=None, unit_scale=None, unit_divisor=None):
                 self.n = 0
                 self.b = unit == 'B'

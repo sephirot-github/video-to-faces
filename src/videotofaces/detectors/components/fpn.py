@@ -26,7 +26,7 @@ class FeaturePyramidNetwork(nn.Module):
     P6 = extra1(C5) [or P5]
     P7 = extra2(relu(P6))
 
-    smoothP5 is probably a mistake, but both torchvision and detectron2 implementations seem to be using it
+    smoothP5 is probably not canon, but both torchvision and detectron2 implementations seem to be using it
     from the paper, same paragraph: "which is to reduce the aliasing effect of upsampling" (but P5 have no upsampling)
     """
 
@@ -55,12 +55,12 @@ class FeaturePyramidNetwork(nn.Module):
         P = [self.conv_laterals[i](C[i]) for i in range(n)]
         
         if self.nonCumulative:
-            # mistake from: https://github.com/barisbatuhan/FaceDetector/blob/main/BBTNet/components/fpn.py
+            # peculiarity from: https://github.com/barisbatuhan/FaceDetector/blob/main/BBTNet/components/fpn.py
             P = [P[i] + F.interpolate(P[i + 1], size=P[i].shape[2:], mode='nearest') for i in range(len(P) - 1)] + [P[-1]]
             for i in range(len(self.conv_smooths)):
                 P[i] = self.conv_smooths[i](P[i])
         elif self.smoothBeforeMerge:
-            # mistake from: https://github.com/biubug6/Pytorch_Retinaface/blob/master/models/net.py
+            # peculiarity from: https://github.com/biubug6/Pytorch_Retinaface/blob/master/models/net.py
             # from the paper: "Finally, we append a 3×3 convolution on each merged map"
             # P5 is never smoothed here (smoothP5 is ignored)
             for i in range(n - 1)[::-1]:

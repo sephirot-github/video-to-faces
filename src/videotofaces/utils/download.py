@@ -38,27 +38,3 @@ def url_download(url, dst=None, gdrive=False):
                     pbar.update(len(chunk))
     finally:
         session.close()
-
-
-def gdrive_download(gid, dst):
-    link = 'https://drive.google.com/uc?id=' + gid
-    url_download(link, dst)
-    
-
-def prep_weights_file(url, fn, gdrive=False):
-    home = osp.dirname(osp.dirname(osp.realpath(__file__))) if '__file__' in globals() else os.getcwd()
-    tdir = osp.join(home, 'weights')
-    os.makedirs(tdir, exist_ok=True)
-    dst = osp.join(tdir, fn)
-    if osp.isfile(dst):
-        print('Using weights from: ' + dst)
-    else:
-        print('Downloading weights from: ' + url)
-        print('To: ' + dst)
-        url_download(url, dst, gdrive)
-    return dst
-
-
-def prep_weights_gdrive(gid, fn):
-    url = 'https://drive.google.com/uc?id=%s' % gid
-    return prep_weights_file(url, fn, gdrive=True)

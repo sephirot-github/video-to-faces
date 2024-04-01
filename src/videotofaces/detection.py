@@ -10,24 +10,20 @@ try:
 except ImportError:
   HAS_DECORD = False
   
-from .utils import tqdm, resize_keep_ratio
+from .utils.pbar import tqdm
+from .utils.image import resize_keep_ratio
 from .dupes import ahash, remove_dupes_nearest, remove_dupes_overall
-#from .detectors.yolo import YOLOv3Detector, YOLOv3DetectorAnime
-from .detectors.mtcnn import MTCNNDetector
+from .detectors.rcnn import Detector_Anime_FasterRCNN
 
 
 def get_detector_model(style, det_model, device):
-    """TBD"""
-    #if style == 'anime':
-    #    return YOLOv3DetectorAnime(device)
-    #elif det_model == 'mtcnn':
-    #    return MTCNNDetector(device)
-    #return YOLOv3Detector(device)
+    if style == 'anime' and det_model == 'rcnn':
+        return Detector_Anime_FasterRCNN(device)
     return 0
     
     
 def detect_faces(files, model, vid_params, det_params, save_params, hash_thr):
-    """TBD"""
+
     out_dir, out_prefix, _, save_frames, save_rejects, save_dupes = save_params
     
     os.makedirs(osp.join(out_dir, 'faces'), exist_ok=True)
@@ -63,7 +59,7 @@ def detect_faces(files, model, vid_params, det_params, save_params, hash_thr):
     
     
 def process_video(path, model, vid_params, det_params, save_params, hash_thr):
-    """TBD"""
+
     video_step, video_fragment, video_area, video_reader = vid_params
     bs, _, _, _, _, _ = det_params
     use_decord = HAS_DECORD and video_reader == 'decord'
@@ -121,23 +117,23 @@ def process_video(path, model, vid_params, det_params, save_params, hash_thr):
     
     
 def process_frames_batch(frames, indices, model, det_params, save_params, hash_thr, hashes):
-    """TBD"""
     _, mscore, msize, mborder, scale, square = det_params
     out_dir, out_prefix, resize_to, _, _, _ = save_params
     imsize = frames[0].shape[:2]
     # 1. Do a forward pass through detection network for a batch of frames, receive list[np.array(ndet, 5)] (len = batch_size)
-    boxes = model(frames)
+    b, s, _ = model(frames)
+    boxes = [np.concatenate((bi, si[:, None]), axis=1) for bi, si in zip(b, s)]
     # 2. Remove boxes that don't satisfy specified basic conditions
     # Boxes' coordinates are rounded to int, each array becomes a list of tuples
     boxes = [filter_boxes(b, imsize, mscore, msize, mborder, save_params, f, i) for (b, f, i) in zip(boxes, frames, indices)] # list[list[tuple(int, int, int, int, float)]]
     # 3. Scale and/or square each box according to settings
-    boxes = [adjust_boxes(b, imsize, scale, square) for b in boxes]                                                 # list[list[tuple(int, int, int, int, float)]]
+    boxes = [adjust_boxes(b, imsize, scale, square) for b in boxes]               # list[list[tuple(int, int, int, int, float)]]
     # 4. Get cropped images, and also save frame number corresponding to each
-    faces = [(get_crops(f, b), i) for (f, i, b) in zip(frames, indices, boxes)]                     # list[(list[imgs], frame_index)]
+    faces = [(get_crops(f, b), i) for (f, i, b) in zip(frames, indices, boxes)]   # list[(list[imgs], frame_index)]
     # 5. Flatten the list of lists, while also saving the order of faces
-    faces = [(img, i, j) for (imgs, i) in faces for j, img in enumerate(imgs)]                            # list[(img, frame_index, face_index_within_frame)]
+    faces = [(img, i, j) for (imgs, i) in faces for j, img in enumerate(imgs)]    # list[(img, frame_index, face_index_within_frame)]
     # 6. Create filenames from indices saved during 2 prev steps
-    faces = [(img, out_prefix + '%06d_%u.jpg' % (i, j)) for (img, i, j) in faces]                     # list[(img, filename)]
+    faces = [(img, out_prefix + '%06d_%u.jpg' % (i, j)) for (img, i, j) in faces] # list[(img, filename)]
     # 7. Resize all faces if needed
     if resize_to:
         faces = [(resize_keep_ratio(img, resize_to), fn) for (img, fn) in faces]
@@ -152,12 +148,10 @@ def process_frames_batch(frames, indices, model, det_params, save_params, hash_t
     
 
 def get_crops(img, boxes):
-    """TBD"""
     return [img[y1: y2, x1: x2] for (x1, y1, x2, y2, _) in boxes]
 
     
 def check_box(box, img_size, mscore, msize, mborder):
-    """TBD"""
     x1, y1, x2, y2, score = box
     H, W = img_size
     c1 = score < mscore
@@ -167,7 +161,7 @@ def check_box(box, img_size, mscore, msize, mborder):
 
 
 def filter_boxes(boxes, img_size, mscore, msize, mborder, save_params, frame, frame_index):
-    """TBD"""
+
     boxes = [(int(np.floor(x1)), int(np.floor(y1)), int(np.ceil(x2)), int(np.ceil(y2)), score) for (x1, y1, x2, y2, score) in boxes]
     boxes = [(b, check_box(b, img_size, mscore, msize, mborder)) for b in boxes]
     passed = [b for (b, c) in boxes if not any(c)]
@@ -213,7 +207,6 @@ def filter_boxes(boxes, img_size, mscore, msize, mborder, save_params, frame, fr
 
  
 def adjust_boxes(boxes, img_size, scale, square):
-    """TBD"""
     if isinstance(scale, int):
         scale = (scale, scale, scale, scale)
     (sx1, sx2, sy1, sy2) = scale

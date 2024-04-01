@@ -7,29 +7,30 @@ import numpy as np
 import sklearn.metrics
 import sklearn.cluster
 
-from .utils import tqdm, crop_to_area
+from .utils.pbar import tqdm
+from .utils.image import crop_to_area
 from .dupes import remove_dupes_overall
-from .encoders import MobileFaceNetEncoder, IncepResEncoder, IResNetEncoder
-from .encoders import VitEncoderAnime
+#from .encoders import MobileFaceNetEncoder, IncepResEncoder, IResNetEncoder
+#from .encoders import VitEncoderAnime
 
 def get_encoder_model(style, enc_model, device):
-    """TBD"""
-    s = enc_model.split(':')
-    if style == 'anime':
-        return VitEncoderAnime(device, enc_model == 'vit_l')
-    elif style == 'live':
-        if enc_model.startswith('mbf'):
-            source = 'insightface' if len(s) == 1 else s[1]
-            return MobileFaceNetEncoder(device, src=source)
-        elif enc_model.startswith('facenet'):
-            source = 'vggface2' if len(s) == 1 else s[1]
-            return IncepResEncoder(device, dataset=source)
-        elif enc_model.startswith('iresnet'):
-            return IResNetEncoder(device, s[1])
+    return 0
+    #s = enc_model.split(':')
+    #if style == 'anime':
+    #    return VitEncoderAnime(device, enc_model == 'vit_l')
+    #elif style == 'live':
+    #    if enc_model.startswith('mbf'):
+    #        source = 'insightface' if len(s) == 1 else s[1]
+    #        return MobileFaceNetEncoder(device, src=source)
+    #    elif enc_model.startswith('facenet'):
+    #        source = 'vggface2' if len(s) == 1 else s[1]
+    #        return IncepResEncoder(device, dataset=source)
+    #    elif enc_model.startswith('iresnet'):
+    ##        return IResNetEncoder(device, s[1])
         # TEST
-        elif enc_model == 'onnx_iresnet':
-            from .encoders.iresnet import ONNXIResNetEncoder
-            return ONNXIResNetEncoder(device)
+    #    elif enc_model == 'onnx_iresnet':
+    #        from .encoders.iresnet import ONNXIResNetEncoder
+    #        return ONNXIResNetEncoder(device)
 
 
 def encode_faces(paths, model, bs, area):

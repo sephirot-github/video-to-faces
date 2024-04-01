@@ -5,11 +5,10 @@ import cv2
 import numpy as np
 import sklearn.metrics
 
-from .utils import resize_keep_ratio
+from .utils.image import resize_keep_ratio
 
 
 def ahash(img):
-    """TBD"""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     tiny = cv2.resize(gray, (8, 8))
     diff = tiny > np.mean(tiny)
@@ -17,7 +16,6 @@ def ahash(img):
 
 
 def remove_dupes_nearest(faces, hashes, hash_thr, save_params):
-    """TBD"""
     out_dir, _, resize_to, _, _, save_dupes = save_params
     idx, log = [], []
     for k in range(len(faces)):
@@ -51,7 +49,6 @@ def remove_dupes_nearest(faces, hashes, hash_thr, save_params):
 
 
 def remove_dupes_overall(X, filenames, dup_params):
-    """TBD"""
     measure_type, threshold, save_dupes, out_dir = dup_params
 
     # https://stackoverflow.com/questions/70902177/calculating-euclidean-distance-with-a-lot-of-pairs-of-points-is-too-slow-in-pyth
