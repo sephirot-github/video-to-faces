@@ -13,12 +13,16 @@ from .utils.image import crop_to_area
 from .dupes import remove_dupes_overall
 
 from .encoders.vit import AnimeVIT
+from .encoders.facenet import FaceNet
 
 
 def get_encoder_model(style, enc_model, device):
     if style == 'anime':
-        isL = enc_model[-1] == 'l'
+        isL = False if enc_model == 'default' else enc_model[-1] == 'l'
         return AnimeVIT(device, isL)
+    if style == 'live':
+        isC = False if enc_model == 'default' else enc_model.split('_')[1] == 'casia'
+        return FaceNet(device, isC)
     return 0
 
 

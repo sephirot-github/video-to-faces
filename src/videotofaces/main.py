@@ -15,18 +15,23 @@ def video_to_faces(input_path=None, input_ext=None,
                    out_dir=None, out_prefix='', resize_to=None,
                    save_frames=False, save_rejects=False, save_dupes=False,
                    video_step=1, video_fragment=None, video_area=None, video_reader='opencv',
-                   det_model='rcnn', det_batch_size=4, det_min_score=0.4, det_min_size=50,
+                   det_model='default', det_batch_size=4, det_min_score=0.4, det_min_size=50,
                    det_min_border=5, det_scale=(1.5, 1.5, 2.2, 1.2), det_square=True,
                    hash_thr=8,
-                   enc_model='vit_b', enc_batch_size=16, enc_area=None,
+                   enc_model='default', enc_batch_size=16, enc_area=None,
                    group_mode='clustering', clusters=None, clusters_save_all=False,
                    ref_dir=None, random_state=0, group_log=True,
                    enc_dup_thr=0.5, enc_oth_thr=1.5,
                    _test_enc=False, _test_exclude_other=False):
-    """TBD"""
-    valid = validate_args(mode, input_path, out_dir, style, group_mode, video_reader)
+
+    valid = validate_args(mode, input_path, out_dir, style, group_mode, video_reader, det_model, enc_model)
     if not valid:
         return
+        
+    if det_model == 'default':
+        det_model = 'rcnn' if style == 'anime' else 'mtcnn'
+    if enc_model == 'default':
+        enc_model = 'vit_b' if style == 'anime' else 'facenet_vgg'
         
     if not out_dir:
         out_dir = input_path if osp.isdir(input_path) else osp.dirname(osp.abspath(input_path))

@@ -15,11 +15,14 @@ from .utils.image import resize_keep_ratio
 from .dupes import ahash, remove_dupes_nearest, remove_dupes_overall
 
 from .detectors.rcnn import AnimeFRCNN
+from .detectors.mtcnn import RealMTCNN
 
 
 def get_detector_model(style, det_model, device):
     if style == 'anime':
         return AnimeFRCNN(device)
+    if style == 'live':
+        return RealMTCNN(device)
     return 0
     
     
@@ -122,8 +125,12 @@ def process_frames_batch(frames, indices, model, det_params, save_params, hash_t
     out_dir, out_prefix, resize_to, _, _, _ = save_params
     imsize = frames[0].shape[:2]
     # 1. Do a forward pass through detection network for a batch of frames, receive list[np.array(ndet, 5)] (len = batch_size)
-    b, s, _ = model(frames)
-    boxes = [np.concatenate((bi, si[:, None]), axis=1) for bi, si in zip(b, s)]
+    detout = model(frames)
+    if isinstance(detout, tuple):
+        b, s, _ = detout
+        boxes = [np.concatenate((bi, si[:, None]), axis=1) for bi, si in zip(b, s)]
+    else:
+        boxes = detout
     # 2. Remove boxes that don't satisfy specified basic conditions
     # Boxes' coordinates are rounded to int, each array becomes a list of tuples
     boxes = [filter_boxes(b, imsize, mscore, msize, mborder, save_params, f, i) for (b, f, i) in zip(boxes, frames, indices)] # list[list[tuple(int, int, int, int, float)]]
@@ -186,11 +193,11 @@ def filter_boxes(boxes, img_size, mscore, msize, mborder, save_params, frame, fr
     i, j, log = 0, 0, []
     for ((x1, y1, x2, y2, score), (c1, c2, c3)) in boxes:
         r = c1 or c2 or c3
-        fn = out_prefix + '%06d_' % frame[1] + ('r%u' % j if r else '%u' % i) + '.jpg'
+        fn = out_prefix + '%06d_' % frame_index + ('r%u' % j if r else '%u' % i) + '.jpg'
         data = [fn, '%.2f' % score, x2 - x1, y2 - y1, x1, y1, x2, y2, int(c1), int(c2), int(c3), int(r)]
         log.append(','.join([str(el) for el in data]))
         if r:
-            cv2.imwrite(osp.join(out_dir, 'intermediate', 'rejects', fn), frame[0][max(0, y1): min(H, y2), max(0, x1): min(W, x2)])
+            cv2.imwrite(osp.join(out_dir, 'intermediate', 'rejects', fn), frame[max(0, y1): min(H, y2), max(0, x1): min(W, x2)])
             j += 1
         else:
             i += 1

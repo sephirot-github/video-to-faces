@@ -168,7 +168,7 @@ class AnimeFRCNN():
     def __init__(self, device=None):
         print('Initializing FasterRCNN model for anime face detection')
         dv = device or ('cuda:0' if torch.cuda.is_available() else 'cpu')
-        self.model = FasterRCNN(device)
+        self.model = FasterRCNN(dv)
         load_weights(self.model, self.link, 'frcnn_anime', self.wconv, 'state_dict')
         self.model.eval()
 

@@ -10,10 +10,10 @@ from videotofaces.detectors.rcnn import AnimeFRCNN
 class TestRCNN(unittest.TestCase):
 
     def test_rcnn_mmdet_resnet50_animefaces(self):
-        model = AnimeFRCNN()
         testdir = osp.dirname(osp.realpath(__file__))
         paths = [osp.join(testdir, 'images', 'anime_det_%u.jpg' % el) for el in [1, 2, 3, 4]]
         imgs = [cv2.imread(pt) for pt in paths]
+        model = AnimeFRCNN()
         b, s, _ = model(imgs)
         self.assertEqual((len(b), len(s)), (4, 4))
         self.assertEqual((b[0].shape, s[0].shape), ((14, 4), (14,)))

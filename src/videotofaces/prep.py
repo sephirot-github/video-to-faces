@@ -15,7 +15,7 @@ def check_limited_option(val, arg_name, possible_vals):
     return True
 
 
-def validate_args(mode, input_path, out_dir, style, group_mode, video_reader):
+def validate_args(mode, input_path, out_dir, style, group_mode, video_reader, det_model, enc_model):
     if not check_limited_option(mode, 'mode', ['full', 'detection', 'grouping']):
         return False
     
@@ -36,6 +36,12 @@ def validate_args(mode, input_path, out_dir, style, group_mode, video_reader):
     res = res and check_limited_option(style, 'style', ['live', 'anime'])
     res = res and check_limited_option(group_mode, 'group_mode', ['clustering', 'classification'])
     res = res and check_limited_option(video_reader, 'video_reader', ['opencv', 'decord'])
+    if style == 'live':
+        res = res and check_limited_option(det_model, 'det_model', ['default', 'mtcnn'])
+        res = res and check_limited_option(enc_model, 'enc_model', ['default', 'facenet_vgg', 'facenet_casia'])
+    if style == 'anime':
+        res = res and check_limited_option(det_model, 'det_model', ['default', 'rcnn'])
+        res = res and check_limited_option(enc_model, 'enc_model', ['default', 'vit_b', 'vit_l'])
     return res
     
     
