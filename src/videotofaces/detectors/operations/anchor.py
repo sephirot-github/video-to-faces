@@ -3,7 +3,7 @@ import math
 import torch
 
 
-def make_anchors(dims, scales=[1], ratios=[1], rounding=False):
+def make_anchors(dims, scales=[1], ratios=[1]):
     """For every possible combination (D, S, R) of dims, scales and ratios,
     makes a box with area = D*D*S*S and aspect ratio = R,
     returning len(dims) lists, each with len(scales) * len(ratios) tuples.
@@ -12,22 +12,8 @@ def make_anchors(dims, scales=[1], ratios=[1], rounding=False):
     Output: [[(16, 16), (8, 8), (1.6, 1.6), (22.63, 11.31), (11.31, 5.66), (2.26, 1.13)],
              [(32, 32), (16, 16), (3.2, 3.2), (45.25, 22.63), (22.63, 11.31), (4.53, 2.26)]]
     """
-    if rounding:
-        return _make_anchors_rounded(dims, scales, ratios)
     mult = [math.sqrt(ar) for ar in ratios]
     anchors = [[(d * s * m, d * s / m) for m in mult for s in scales] for d in dims]
-    return anchors
-
-
-def _make_anchors_rounded(dims, scales, ratios):
-    """Same as make_anchors but with two intermediate roundings to replicate TorchVision code:
-    https://github.com/pytorch/vision/blob/main/torchvision/models/detection/anchor_utils.py#L58
-    https://github.com/pytorch/vision/blob/main/torchvision/models/detection/retinanet.py#L51
-    """
-    mult = [math.sqrt(ar) for ar in ratios]
-    dims_scaled = [[int(d * s) for s in scales] for d in dims]
-    anchors = [[(int(d * s) * m, int(d * s) / m) for m in mult for s in scales] for d in dims]
-    anchors = [[(round(w / 2) * 2, round(h / 2) * 2) for (w, h) in group] for group in anchors]
     return anchors
 
 
