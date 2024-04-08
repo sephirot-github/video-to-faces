@@ -13,7 +13,7 @@ class TestMTCNN(unittest.TestCase):
         testdir = osp.dirname(osp.realpath(__file__))
         paths = [osp.join(testdir, 'images', 'irl_det_%u.jpg' % el) for el in [1, 2, 3, 4]]
         imgs = [cv2.imread(pt) for pt in paths]
-        model = RealMTCNN()
+        model = RealMTCNN(min_face_size=20)
         res = model(imgs)
         self.assertEqual(len(res), 4)
         self.assertEqual(res[0].shape, (15, 5))

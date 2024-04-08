@@ -56,7 +56,11 @@ def prep_file(link, fn):
     """
     gdrive = '://' not in link
     url = link if '://' in link else 'https://drive.google.com/uc?id=%s' % link
-    home = osp.dirname(osp.dirname(osp.realpath(__file__))) if '__file__' in globals() else os.getcwd()
+    if '__file__' in globals():
+        # 4 levels above this code file, i.e. to the repo root
+        home = osp.dirname(osp.dirname(osp.dirname(osp.dirname(osp.realpath(__file__)))))
+    else:
+        home = os.getcwd()
     tdir = osp.join(home, 'weights')
     os.makedirs(tdir, exist_ok=True)
     dst = osp.join(tdir, fn)
