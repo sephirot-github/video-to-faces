@@ -37,7 +37,7 @@ def validate_args(mode, input_path, out_dir, style, group_mode, video_reader, de
     res = res and check_limited_option(group_mode, 'group_mode', ['clustering', 'classification'])
     res = res and check_limited_option(video_reader, 'video_reader', ['opencv', 'decord'])
     if style == 'live':
-        res = res and check_limited_option(det_model, 'det_model', ['default', 'mtcnn'])
+        res = res and check_limited_option(det_model, 'det_model', ['default', 'yolo', 'mtcnn'])
         res = res and check_limited_option(enc_model, 'enc_model', ['default', 'facenet_vgg', 'facenet_casia'])
     if style == 'anime':
         res = res and check_limited_option(det_model, 'det_model', ['default', 'rcnn'])

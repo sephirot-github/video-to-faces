@@ -29,7 +29,7 @@ def video_to_faces(input_path=None, input_ext=None,
         return
         
     if det_model == 'default':
-        det_model = 'rcnn' if style == 'anime' else 'mtcnn'
+        det_model = 'rcnn' if style == 'anime' else 'yolo'
     if enc_model == 'default':
         enc_model = 'vit_b' if style == 'anime' else 'facenet_vgg'
         
