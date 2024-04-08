@@ -53,7 +53,7 @@ class RegionProposalNetwork(nn.Module):
             log, top = log.topk(min(lvtop, log.shape[1]), dim=1)
             reg = reg.gather(1, top.expand(-1, -1, 4))
             pri = p.expand(n, -1, -1).gather(1, top.expand(-1, -1, 4))
-            boxes = decode_boxes(reg, pri, 1, 1)
+            boxes = decode_boxes(reg, pri)
             res.append((boxes, log, log.shape[1]))
         return map(list, zip(*res))
 
@@ -117,7 +117,7 @@ class RoIProcessingNetwork(nn.Module):
         proposals, imidx = proposals[idx], imidx[idx]
 
         proposals = convert_to_cwh(proposals, in_place=True)
-        boxes = decode_boxes(reg, proposals, 0.1, 0.2)
+        boxes = decode_boxes(reg, proposals, (0.1, 0.2))
         boxes = clamp_to_canvas(boxes, imsizes, imidx)
         boxes, scr, cls, imidx = remove_small(boxes, 0, scr, cls, imidx)
         b, s, c = final_nms(boxes, scr, cls, imidx, n, 0.5, 100)

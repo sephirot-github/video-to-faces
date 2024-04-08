@@ -15,6 +15,7 @@ from .utils.image import resize_keep_ratio
 from .dupes import ahash, remove_dupes_nearest, remove_dupes_overall
 
 from .detectors.rcnn import AnimeFRCNN
+from .detectors.yolo import RealYOLO
 from .detectors.mtcnn import RealMTCNN
 
 
@@ -22,7 +23,9 @@ def get_detector_model(style, det_model, device):
     if style == 'anime':
         return AnimeFRCNN(device)
     if style == 'live':
-        return RealMTCNN(device)
+        if det_model == 'mtcnn':
+            return RealMTCNN(device)
+        return RealYOLO(device)
     return 0
     
     

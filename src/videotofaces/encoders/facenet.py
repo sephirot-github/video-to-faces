@@ -169,7 +169,7 @@ class FaceNet():
 
     def __init__(self, device=None, isC=False):
         src = 'vgg' if not isC else 'casia'
-        print('Initializing FaceNet %s model for live-action face encoding' % src)
+        print('Initializing FaceNet %s model for live-action face encoding' % src.upper())
         dv = device or ('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.model = InceptionResnetV1(dv)
         load_weights(self.model, self.links[src], 'facenet_' + src, extra_conversion=self.no_classify)

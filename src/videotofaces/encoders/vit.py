@@ -131,7 +131,7 @@ class AnimeVIT():
         src = 'B16' if not isL else 'L16'
         dim =   768 if not isL else 1024
         depth =  12 if not isL else 24
-        print('Initializing ViT_%s model for anime face encoding' % src)
+        print('Initializing ViT %s model for anime face encoding' % src)
         self.model = ViT(dv, 128, 16, dim, depth)
         load_weights(self.model, self.links[src], 'vit_anime_' + src.lower(), self.wconv)
         self.model.eval()
