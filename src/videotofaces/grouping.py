@@ -134,8 +134,8 @@ def cluster_faces(paths, X, cluster_params):
         values, counts = np.unique(labels[i], return_counts=True)
         print((sub + ': ' if sub else '') + ', '.join(['%u: %u' % (v, c) for v, c in zip(values, counts)]))
     print()
-    #for p in paths:
-    #    os.remove(p)
+    for p in paths:
+        os.remove(p)
 
 
 def test_grouping(paths, refs, test_params):

@@ -50,15 +50,19 @@ def get_clusters(c):
         return list(range(2, 9))
     if isinstance(c, int) and c > 0:
         return [c]
-    if (isinstance(c, tuple) or isinstance(c, list)) and all(isinstance(el, int) for el in c) and all(el > 0 for el in c):
-        return sorted(list(set(c)))
+    #if (isinstance(c, tuple) or isinstance(c, list)) and all(isinstance(el, int) for el in c) and all(el > 0 for el in c):
+    #    return sorted(list(set(c)))
+    if isinstance(c, str) and ',' in c:
+        v = c.split(',')
+        if all([vv.isdigit() for vv in v]):
+            return sorted(list(set([int(vv) for vv in v])))
     if isinstance(c, str):
         v = c.split('-')
         if len(v) == 2 and v[0].isdigit() and v[1].isdigit():
             a, b = int(v[0]), int(v[1])
             if a > 0 and a < b:
                 return list(range(a, b + 1))
-    print('ERROR: incorrent value for clusters. Please specify a natural number, a tuple/list of natural numbers, or a range in a string form "A-B" where 0 < A < B')
+    print('ERROR: incorrent value for clusters. Please specify a natural number or a string either as an enumeration "C1,C2,C3,C4" or a range "A-B" where 0 < A < B')
     return None
 
 
