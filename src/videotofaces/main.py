@@ -71,7 +71,7 @@ def video_to_faces(input_path=None, input_ext=None,
         features = encode_faces(imgpaths, encoder, enc_batch_size, enc_area)
         if enc_dup_thr:
             dup_params = ('enc', enc_dup_thr, save_dupes, out_dir)
-            features, _ = remove_dupes_overall(features, imgpaths, dup_params)
+            features, imgpaths = remove_dupes_overall(features, imgpaths, dup_params)
         if group_mode == 'clustering':
             cluster_params = (clusters, clusters_save_all, random_state, group_log, out_dir)
             cluster_faces(imgpaths, features, cluster_params)

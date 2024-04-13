@@ -139,7 +139,6 @@ def get_video_list(input, ext):
     if not files:
         print('ERROR: no files are found in the specified input directory')
     if ext:
-        print(ext)
         # filtering by extensions specified inside semicolon-separated string
         files = [s for s in files if s.lower().split('.')[-1] in ext.split(';')]
         if not files:

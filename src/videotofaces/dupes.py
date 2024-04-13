@@ -75,10 +75,11 @@ def remove_dupes_overall(X, filenames, dup_params):
             mdigit, mname = '2', 'hash_diff'
         else:
             mdigit, mname = '3', 'distance'
-        dir = osp.join(out_dir, 'intermediate', 'dupes' + mdigit)
-        os.makedirs(dir, exist_ok=True)
+        dup_dir = osp.join(out_dir, 'intermediate', 'dupes' + mdigit)
+        os.makedirs(dup_dir, exist_ok=True)
         for fn in dupes:
-            os.replace(osp.join(out_dir, 'faces', fn), osp.join(dir, fn))
+            fn = osp.basename(fn) # we already have filenames for dupes2 but absolute paths for dupes3, and osp.join discards absolutes
+            os.replace(osp.join(out_dir, 'faces', fn), osp.join(dup_dir, fn))
         with open(osp.join(out_dir, 'intermediate', 'log_dupes' + mdigit + '.csv'), 'w') as f:
             f.write('file_name,nearest_in_prev,' + mname + ',marked_as_duplicate\n')
             for i in range(1, len(filenames)):

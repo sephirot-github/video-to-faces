@@ -170,7 +170,7 @@ class YOLOv3(nn.Module):
 
         strides = [bs[0] for bs in self.bases]
         lvidx = get_lvidx(idx % dim, map_sizes)
-        stidx = torch.tensor(strides)[lvidx].unsqueeze(-1)
+        stidx = torch.tensor(strides).to(reg.device)[lvidx].unsqueeze(-1)
         b = decode_boxes(reg[idx], priors[idx % dim], mode='yolo', strides=stidx)
         b, s, c = final_nms(b, s, c, imidx, n, 0.45, 100)
         return b, s, c

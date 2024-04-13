@@ -57,7 +57,7 @@ def classify(X, R, classes, thr, log, paths, out_dir):
         classes.append('other')
     if log:
         fnames = [osp.basename(p) for p in paths]
-        with open(osp.join(out_dir, 'log_classification.csv'), 'w') as f:
+        with open(osp.join(out_dir, 'faces', 'log_classification.csv'), 'w') as f:
             extra = '(other_threshold=%s)' % str(thr) if thr else ''
             f.write('file_name,' + ','.join(['dist_' + c for c in classes if c != 'other']) +
                     ',assigned_to_class' + extra + '\n')
@@ -108,7 +108,7 @@ def cluster_faces(paths, X, cluster_params):
         s3 = sklearn.metrics.davies_bouldin_score(X, labels[i])
         scores.append((clusters[i], s1, s2, s3))
     if log:
-        with open(osp.join(out_dir, 'log_clustering.csv'), 'w') as f:
+        with open(osp.join(out_dir, 'faces', 'log_clustering.csv'), 'w') as f:
             f.write('n_clusters,silhouette_score,calinski_harabasz_score,davies_bouldin_score\n')
             for score in scores:
                 f.write('%u,%s,%s,%s\n' % score)
