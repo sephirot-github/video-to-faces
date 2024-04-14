@@ -57,7 +57,7 @@ def remove_dupes_overall(X, filenames, dup_params):
         # D = nsklearn.metrics.pairwise_distances(X, metric='hamming') * 64 # equivalent
         D = D.astype(np.uint16)
     else:
-        D = sklearn.metrics.pairwise_distances(X) # by default it's euclidian distance
+        D = sklearn.metrics.pairwise.cosine_distances(X)
 
     D += (1 - np.tri(X.shape[0], k=-1).astype(D.dtype)) * 10000
     mins = D.min(axis=1)

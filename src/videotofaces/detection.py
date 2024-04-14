@@ -38,7 +38,7 @@ def detect_faces(files, model, vid_params, det_params, save_params, hash_thr):
         os.makedirs(osp.join(out_dir, 'intermediate', 'frames'), exist_ok=True)
     if save_rejects:
         os.makedirs(osp.join(out_dir, 'intermediate', 'rejects'), exist_ok=True)
-    if save_dupes:
+    if save_dupes and hash_thr and hash_thr != -1:
         os.makedirs(osp.join(out_dir, 'intermediate', 'dupes1'), exist_ok=True)
 
     if len(files) > 1:
@@ -54,7 +54,7 @@ def detect_faces(files, model, vid_params, det_params, save_params, hash_thr):
         fnames.extend(fnames_k)
         hashes.extend(hashes_k)
 
-    if hash_thr:
+    if hash_thr and hash_thr != -1:
         dup_params = ('hash', hash_thr, save_dupes, out_dir)
         _, fnames = remove_dupes_overall(np.stack(hashes), fnames, dup_params)
     
@@ -149,7 +149,7 @@ def process_frames_batch(frames, indices, model, det_params, save_params, hash_t
     if resize_to:
         faces = [(resize_keep_ratio(img, resize_to), fn) for (img, fn) in faces]
     # 8. Remove all faces that are near-identical to one of the N preceeding faces (N = 5)
-    if hash_thr:
+    if hash_thr and hash_thr != -1:
         faces, hashes = remove_dupes_nearest(faces, hashes, hash_thr, save_params)
     # 9. Save results on disk
     for (img, fn) in faces:

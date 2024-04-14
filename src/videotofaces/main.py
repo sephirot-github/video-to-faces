@@ -21,7 +21,7 @@ def video_to_faces(input_path=None, input_ext=None,
                    enc_model='default', enc_batch_size=16, enc_area=None,
                    group_mode='clustering', clusters=None, clusters_save_all=False,
                    ref_dir=None, random_state=0, group_log=True,
-                   enc_dup_thr=0.5, enc_oth_thr=1.5,
+                   enc_dup_thr=0.25, enc_oth_thr=0.9,
                    _test_enc=False, _test_exclude_other=False):
 
     valid = validate_args(mode, input_path, out_dir, style, group_mode, video_reader, det_model, enc_model)
@@ -69,7 +69,7 @@ def video_to_faces(input_path=None, input_ext=None,
             return
         encoder = get_encoder_model(style, enc_model, device)
         features = encode_faces(imgpaths, encoder, enc_batch_size, enc_area)
-        if enc_dup_thr:
+        if enc_dup_thr and enc_dup_thr != -1:
             dup_params = ('enc', enc_dup_thr, save_dupes, out_dir)
             features, imgpaths = remove_dupes_overall(features, imgpaths, dup_params)
         if group_mode == 'clustering':

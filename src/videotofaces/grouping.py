@@ -48,10 +48,9 @@ def encode_refs(refs, model):
 
     
 def classify(X, R, classes, thr, log, paths, out_dir):
-    dist = sklearn.metrics.pairwise_distances(X, R, metric='euclidean')
-    # above is = np.linalg.norm(X[:, None] - R, axis=-1) but faster and uses less memory
+    dist = sklearn.metrics.pairwise.cosine_distances(X, R)
     inds = dist.argmin(axis=1)
-    if thr:
+    if thr and thr != -1:
         mins = dist.min(axis=1)
         inds[mins >= thr] = len(classes)
         classes.append('other')
