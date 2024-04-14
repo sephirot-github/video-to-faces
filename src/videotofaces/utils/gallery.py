@@ -14,22 +14,33 @@ def get_base64(path, h):
     enc = cv2.imencode('.jpg', img)[1]
     return "data:image.jpg;base64," + b64encode(enc).decode()
 
-def image_gallery(dir, page_size=None, page_number=0, height=150, extensions='.jpg'):
-    paths = [osp.join(dir, f) for f in sorted(os.listdir(dir)) if osp.isfile(osp.join(dir, f)) and f.lower().endswith(extensions)]
-    captions = [osp.basename(p) for p in paths]
-    bs, p, l = page_size if page_size else len(paths), page_number, len(paths)
-    if bs*p+1 > l:
-        print('starting image index (%d) exceeds the number of files in folder (%d)' % (bs*p+1, l))
-        return
-    # https://mindtrove.info/jupyter-tidbit-image-gallery/
-    s = '<div style="display: flex; flex-flow: row wrap; text-align: center;">'
-    for i in range(bs*p, min(bs*(p+1), l)):
-        s += '<figure style="margin: 5px !important;">'
-        s += '<img src="' + get_base64(paths[i], height) + '" style="height: ' + str(height) + 'px">'
-        s += '<figcaption style="font-size: 0.9em">' + captions[i] + '</figcaption>'
-        s += '</figure>'
-    s += '</div>'
-    print('%d-%d out of %d' % (bs*p+1, min(bs*(p+1), l), l))
+def image_gallery(dir, page_size=None, page_number=0, height=150, extensions='.jpg', subfolders=False, centered=False):
+    subs = [''] if not subfolders else [d for d in sorted(os.listdir(dir)) if osp.isdir(osp.join(dir, d))]
+    s = ''
+    for sub in subs:
+        if sub:
+            s += '<h2>%s</h2>' % sub
+        sdir = osp.join(dir, sub)
+        paths = [osp.join(sdir, f) for f in sorted(os.listdir(sdir)) if osp.isfile(osp.join(sdir, f)) and f.lower().endswith(extensions)]
+        captions = [osp.basename(p) for p in paths]
+        bs, p, l = page_size if page_size else len(paths), page_number, len(paths)
+        if bs*p+1 > l:
+            s += '<p>starting image index (%d) exceeds the number of files in folder (%d)</p>' % (bs*p+1, l)
+        else:
+            # https://mindtrove.info/jupyter-tidbit-image-gallery/
+            s += '<p>%d-%d out of %d</p>' % (bs*p+1, min(bs*(p+1), l), l)
+            css = 'display: flex; flex-flow: row wrap; text-align: center;'
+            if centered:
+                css += ' justify-content: center;'
+            s += '<div style="%s">' % css
+            for i in range(bs*p, min(bs*(p+1), l)):
+                s += '<figure style="margin: 5px !important;">'
+                s += '<img src="' + get_base64(paths[i], height) + '" style="height: ' + str(height) + 'px">'
+                s += '<figcaption style="font-size: 0.9em">' + captions[i] + '</figcaption>'
+                s += '</figure>'
+            s += '</div>'
+    if centered:
+        s = '<div style="text-align: center;">%s</div>' % s
     display(HTML(s))
 
 # https://stackoverflow.com/questions/47113934/how-to-display-table-with-text-and-images-in-jupyter-notebook
