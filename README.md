@@ -252,7 +252,7 @@ I initially started this when playing with [TWDNE](https://gwern.net/twdne) (rem
 
 You could say this was a classic hobbyist descent into the rabbit hole of ML, repeatedly getting out of scope and distracted with details without finishing anything. Except that, after another year or so, I decided to come back to at least get this collection of stuff sorted out and documented. But since nobody's needed cropped face datasets to train generative models for years now, the original purpose of this library has been lost in time.
 
-I guess it could still be helpful for collecting or documenting purposes. For example, if you're making a wiki about a TV show or an anime series, you might appreciate having at hand a lot of cropped faces/portraits directly from the sources at hand.
+I guess it could still be helpful for collecting or documenting purposes. For example, if you're making a wiki about a TV show or an anime series, you might appreciate having a lot of cropped faces/portraits directly from the sources at hand.
 
 ## Bonus
 If you're on desktop, you probably won't have any trouble with quickly looking through the results using a standard file explorer. But if you're inside Google Colab or some other cloud-based Jupyter Notebook, there's a couple of helper functions included.
