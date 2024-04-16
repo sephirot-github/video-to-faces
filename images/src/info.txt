@@ -1,0 +1,4 @@
+video screenshot with ui controls taken in mpv (https://mpv.io)
+with ui controls enlarged by adding the following into mpv.conf:
+
+script-opts=osc-scalewindowed=2,osc-scalefullscreen=2
