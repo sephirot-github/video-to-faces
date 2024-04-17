@@ -54,7 +54,7 @@ def dataframe_with_images(csv_path, img_root_dir, height=120, sort_by=None, filt
         df = df.loc[(df[fcol] >= fmin) & (df[fcol] <= fmax)]
     for col in fn_cols:
         nn = '[img]' + col
-        df[nn] = df[col].apply(lambda x: glob(osp.join(img_root_dir, '**', x), recursive=True)[0])
+        df[nn] = df[col].apply(lambda x: glob(osp.join(img_root_dir, '**', osp.basename(x)), recursive=True)[0])
         df[nn] = df[nn].apply(lambda x: '<img src="' + get_base64(x, height) + '" style="height: ' + str(height) + 'px">')
     s = df.to_html(escape=False)
     print('Rows selected: %u' % df.shape[0])
