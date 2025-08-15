@@ -20,6 +20,10 @@ setup(
         'requests',
         'scikit-learn',
         'torch',
+        'ipython',
+        'pandas',
+        'Pillow',
+        'tqdm' 
     ],
     classifiers=[
         # complete classifier list: http://pypi.python.org/pypi?%3Aaction=list_classifiers
