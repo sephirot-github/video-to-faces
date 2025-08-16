@@ -6,3 +6,5 @@ __pycache__/
 
 weights/
 datasets/
+venv/
+output_faces/
