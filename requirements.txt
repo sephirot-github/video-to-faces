@@ -1,0 +1,11 @@
+numpy,
+opencv-python,
+requests,
+scikit-learn,
+torch,
+torchvision,
+ipython,
+pandas,
+Pillow,
+tqdm,
+gradio>=4.0
